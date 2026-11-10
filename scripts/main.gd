@@ -8,15 +8,34 @@ const TOOLBAR_HEIGHT := 60
 
 ## Height taken by an in-window menu bar (zero on macOS, which uses the native menu bar).
 func _menu_height() -> int:
-	return 0 if DisplayServer.has_feature(DisplayServer.FEATURE_GLOBAL_MENU) else 28
+	if Layout.is_ios() or DisplayServer.has_feature(DisplayServer.FEATURE_GLOBAL_MENU):
+		return 0
+	return int(28 * Layout.ui_scale())
+
+## Height of the toolbar (scaled up on phones).
+func _toolbar_height() -> int:
+	return int(TOOLBAR_HEIGHT * Layout.ui_scale())
+
+## The safe-area insets (camera cut-out, rounded corners, home indicator).
+func _insets() -> Vector4:
+	return Layout.safe_insets()
 
 var _content: Control
 var _toolbar_bar: PanelContainer
 var _globe_container: SubViewportContainer
 var _globe_viewport: SubViewport
 var _globe: Node3D
-var _flat: Control
+var _flat: FlatStage
 var _time_label: Label
+var _star_tip: PanelContainer
+var _star_tip_label: Label
+var _star_tip_timer: Timer
+var _star_tip_pos := Vector2.ZERO
+var _welcome_button: Button
+var _more_button: Button
+var _more_menu: PopupMenu
+var _fps_label: Label
+var _fps_accum := 0.0
 var _status: PanelContainer
 var _toolbar: HBoxContainer
 var _menu_bar: MenuBar
@@ -31,6 +50,7 @@ var _quake_list: Window
 var _live_status: Window
 var _locations: Window
 var _regions: Window
+var _satellites: Window
 var _debugger: Window
 var _bg: ColorRect
 var _snapshot_dialog: FileDialog
@@ -50,13 +70,17 @@ var _shot_frames := 0
 func _ready() -> void:
 	_parse_command_line()
 	set_anchors_preset(Control.PRESET_FULL_RECT)
+	if Layout.is_phone():
+		# Bigger default text for every label, button, menu and dialog on a phone.
+		theme = Theme.new()
+		theme.default_font_size = Layout.font(16)
 	_bg = ColorRect.new()
 	_bg.color = Settings.get_color("color_background")
 	_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_bg)
 	_content = Control.new()
 	_content.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_content.offset_top = TOOLBAR_HEIGHT + _menu_height()
+	_content.offset_top = _toolbar_height() + _menu_height() + _insets().y
 	_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_content)
 	_build_views()
@@ -68,12 +92,14 @@ func _ready() -> void:
 	add_child(_player)
 	Settings.changed.connect(_on_setting_changed)
 	QuakeService.new_quake.connect(_on_new_quake)
+	QuakeService.biggest_new_quake.connect(_on_biggest_new_quake)
 	QuakeService.fetch_started.connect(func() -> void:
 		if QuakeService.fetch_count == 0:
 			_status.post("Refreshing earthquake data.", 4.0))
 	QuakeService.fetch_failed.connect(func(reason: String) -> void: _status.post("Earthquake data: " + reason, 5.0))
 	_apply_view_type()
 	_update_debug_grid()
+	get_window().size_changed.connect(_relayout)   # the safe area changes when a phone is rotated
 	if _cam_args.size() == 3:
 		_globe.set_camera(_cam_args[0], _cam_args[1], _cam_args[2])
 	if _open_on_start != "":
@@ -128,30 +154,94 @@ func _build_views() -> void:
 	_globe.hover_changed.connect(_on_hover)
 	_globe.location_clicked.connect(_on_location_clicked)
 	_globe_container.gui_input.connect(_globe.handle_gui_input)
+	_globe.star_tooltip_changed.connect(_on_star_tooltip)   # macOS only
 	_globe_container.mouse_entered.connect(_globe.set_mouse_inside.bind(true))
 	_globe_container.mouse_exited.connect(func() -> void:
 		_globe.set_mouse_inside(false)
+		_on_star_tooltip("", Vector2.ZERO)
 		_on_hover(0.0, 0.0, false))
-	_flat = load("res://scripts/views/flat_view.gd").new()
+	_flat = FlatStage.new()
 	_flat.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_flat.hover_changed.connect(_on_hover)
 	_flat.location_clicked.connect(_on_location_clicked)
 	_content.add_child(_flat)
 
+## Star tooltip: drawn by us (not Godot's built-in tooltip) so it can sit beside the mouse pointer
+## instead of under it.
+func _on_star_tooltip(text: String, pos: Vector2) -> void:
+	_star_tip_timer.stop()
+	_star_tip.visible = false
+	if text == "":
+		return
+	_star_tip_label.text = text
+	_star_tip_pos = pos
+	_star_tip_timer.start()
+
+func _show_star_tooltip() -> void:
+	_star_tip.reset_size()
+	_star_tip.visible = true
+	# Below and to the right of the pointer, clear of the cursor image; flip to stay inside the view.
+	var spot := _star_tip_pos + Vector2(18.0, 30.0)
+	var limit := _content.size - _star_tip.size
+	if spot.x > limit.x:
+		spot.x = _star_tip_pos.x - _star_tip.size.x - 10.0
+	if spot.y > limit.y:
+		spot.y = _star_tip_pos.y - _star_tip.size.y - 12.0
+	_star_tip.position = spot.clamp(Vector2.ZERO, limit.max(Vector2.ZERO))
+
 func _build_overlays() -> void:
+	_star_tip = PanelContainer.new()
+	_star_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_star_tip.visible = false
+	var tip_style := StyleBoxFlat.new()
+	tip_style.bg_color = Color(0.1, 0.1, 0.12, 0.92)
+	tip_style.border_color = Color(0.45, 0.5, 0.6)
+	tip_style.set_border_width_all(1)
+	tip_style.set_corner_radius_all(4)
+	tip_style.content_margin_left = 8
+	tip_style.content_margin_right = 8
+	tip_style.content_margin_top = 4
+	tip_style.content_margin_bottom = 4
+	_star_tip.add_theme_stylebox_override("panel", tip_style)
+	_star_tip_label = Label.new()
+	_star_tip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_star_tip.add_child(_star_tip_label)
+	_star_tip_timer = Timer.new()
+	_star_tip_timer.one_shot = true
+	_star_tip_timer.wait_time = 0.35
+	_star_tip_timer.timeout.connect(_show_star_tooltip)
+	add_child(_star_tip_timer)
 	_time_label = load("res://scripts/ui/time_label.gd").new()
 	_time_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	_time_label.offset_top = 8
-	_time_label.offset_bottom = 72
+	_time_label.offset_bottom = 8 + 64 * maxf(1.0, Layout.ui_scale() * 0.7)
 	_time_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_content.add_child(_time_label)
+	_fps_label = Label.new()
+	_fps_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_fps_label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_fps_label.offset_top = 8
+	_fps_label.offset_right = -14 - _insets().z
+	_fps_label.add_theme_font_size_override("font_size", Layout.font(20, 0.8))
+	_fps_label.add_theme_color_override("font_color", Color(0.85, 0.9, 0.85))
+	_fps_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_fps_label.add_theme_constant_override("outline_size", 6)
+	_fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_fps_label.visible = Settings.get_bool("show_fps")
+	_content.add_child(_fps_label)
+	_content.add_child(_star_tip)
+	Settings.changed.connect(func(k: String, v: Variant) -> void:
+		if k == "show_fps":
+			_fps_label.visible = bool(v))
 
 	_status = load("res://scripts/ui/status_bar.gd").new()
 	_status.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	_status.anchor_left = 0.04
 	_status.anchor_right = 0.96
-	_status.offset_top = -56
-	_status.offset_bottom = -12
+	# One line on a desktop; two lines of larger text on a phone, kept above the home indicator.
+	var bottom_gap := 12.0 * Layout.ui_scale() + _insets().w
+	_status.offset_bottom = -bottom_gap
+	_status.offset_top = -bottom_gap - (44.0 if not Layout.is_phone() else 2.0 * Layout.font(22, 0.85) * 1.5 + 36.0)
 	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_content.add_child(_status)
 
@@ -189,8 +279,10 @@ func _build_overlays() -> void:
 func _build_menu_bar() -> void:
 	_menu_bar = MenuBar.new()
 	_menu_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_menu_bar.offset_bottom = 28
+	_menu_bar.offset_top = _insets().y
+	_menu_bar.offset_bottom = _insets().y + _menu_height()
 	_menu_bar.prefer_global_menu = true
+	_menu_bar.visible = not Layout.is_ios()   # no menu bar on iOS; the toolbar has the main commands
 	add_child(_menu_bar)
 
 	var file := PopupMenu.new()
@@ -323,6 +415,33 @@ func _refresh_menu_checks() -> void:
 	for i in range(hour_keys.size()):
 		_hours_menu.set_item_checked(i, hour_keys[i] == Settings.get_string("hour_type"))
 
+## iOS has no menu bar. Nearly everything the menus held is in the toolbar or Preferences; this one
+## "More" button holds the few commands that were only in the menus.
+func _build_more_button() -> void:
+	var more := PopupMenu.new()
+	more.add_item("Today's Times…", 1)
+	more.add_item("My Locations…", 2)
+	more.add_item("Earthquake Regions…", 3)
+	more.add_item("Refresh Earthquakes", 4)
+	more.id_pressed.connect(_on_more_menu)
+	add_child(more)
+	_more_menu = more
+	_more_button = _icon_button("BlackList", "More", "Today's times, my locations, earthquake regions and refresh.", func() -> void:
+		var below := Vector2i(_more_button.get_screen_position()) + Vector2i(0, int(_more_button.size.y))
+		more.popup(Rect2i(below, Vector2i.ZERO)))
+
+func _on_more_menu(id: int) -> void:
+	match id:
+		1: _action_times()
+		2: _popup(_locations)
+		3: _popup(_regions)
+		4:
+			QuakeService.refresh()
+			_status.post("Refreshing earthquake data.", 4.0)
+
+func _update_welcome_button(showing: bool) -> void:
+	_welcome_button.icon = load(ICON_DIR + ("GlobeIconSelected" if showing else "GlobeIcon") + ".png")
+
 func _icon_button(icon_name: String, label: String, tip: String, action: Callable) -> Button:
 	var b := Button.new()
 	b.icon = load(ICON_DIR + icon_name + ".png")
@@ -330,9 +449,10 @@ func _icon_button(icon_name: String, label: String, tip: String, action: Callabl
 	b.text = label
 	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	b.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
-	b.custom_minimum_size = Vector2(72, 50)
-	b.add_theme_constant_override("icon_max_width", 24)
-	b.add_theme_font_size_override("font_size", 11)
+	var s := Layout.ui_scale()
+	b.custom_minimum_size = Vector2(72, 50) * s
+	b.add_theme_constant_override("icon_max_width", int(24 * s))
+	b.add_theme_font_size_override("font_size", Layout.font(11))
 	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
 		b.add_theme_color_override(c, Color(0.1, 0.1, 0.12))
 	b.tooltip_text = tip
@@ -355,12 +475,17 @@ func _build_toolbar() -> void:
 	sb.content_margin_bottom = 4
 	_toolbar_bar.add_theme_stylebox_override("panel", sb)
 	_toolbar_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_toolbar_bar.offset_top = _menu_height()
-	_toolbar_bar.offset_bottom = _menu_height() + TOOLBAR_HEIGHT
+	_toolbar_bar.offset_top = _menu_height() + _insets().y
+	_toolbar_bar.offset_bottom = _menu_height() + _insets().y + _toolbar_height()
 	add_child(_toolbar_bar)
+	# The toolbar scrolls sideways when it is wider than the screen (a phone in portrait).
+	var scroll := ScrollContainer.new()
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER   # still scrolls by touch or wheel
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_toolbar_bar.add_child(scroll)
 	_toolbar = HBoxContainer.new()
-	_toolbar.add_theme_constant_override("separation", 4)
-	_toolbar_bar.add_child(_toolbar)
+	_toolbar.add_theme_constant_override("separation", int(4 * Layout.ui_scale()))
+	scroll.add_child(_toolbar)
 	_icon_button("InfoIcon", "About", "View information about Flatland.", _action_about)
 	_icon_button("DebugIcon", "Debugger", "Open the debugger.", func() -> void: _popup(_debugger))
 	_icon_button("LiveStatus", "Live Data", "See current live data status and statistics.", _action_live_status)
@@ -370,6 +495,11 @@ func _build_toolbar() -> void:
 	_icon_button("ResetViewIcon", "Reset View", "Reset the 3D view.", _action_reset_view)
 	_icon_button("CameraButtonUnpressed", "Snapshot", "Take a snapshot of the view.", _action_snapshot)
 	_icon_button("EarthquakeIcon", "Earthquakes", "Show the list of earthquakes.", _action_quake_list)
+	_welcome_button = _icon_button("GlobeIcon", "Welcome", "Show or hide the welcome text.", _globe.toggle_intro)
+	if Layout.is_ios():
+		_build_more_button()
+	_globe.intro_changed.connect(_update_welcome_button)
+	_update_welcome_button(_globe.is_intro_showing())
 
 func _build_dialogs() -> void:
 	_prefs = load("res://scripts/ui/prefs_dialog.gd").new()
@@ -380,10 +510,12 @@ func _build_dialogs() -> void:
 	_locations = load("res://scripts/ui/locations_dialog.gd").new()
 	_regions = load("res://scripts/ui/regions_dialog.gd").new()
 	_debugger = load("res://scripts/ui/debug_dialog.gd").new()
-	for w in [_prefs, _about, _times, _quake_list, _live_status, _locations, _regions, _debugger]:
+	_satellites = load("res://scripts/ui/satellites_dialog.gd").new()
+	for w in [_prefs, _about, _times, _quake_list, _live_status, _locations, _regions, _debugger, _satellites]:
 		w.visible = false
 		add_child(w)
 	_quake_list.quake_chosen.connect(_on_quake_chosen)
+	_prefs.open_satellites.connect(func() -> void: _popup(_satellites))
 	_snapshot_dialog = FileDialog.new()
 	_snapshot_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
 	_snapshot_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -397,6 +529,12 @@ func _build_dialogs() -> void:
 func _popup(w: Window, size_hint: Vector2i = Vector2i.ZERO) -> void:
 	if size_hint != Vector2i.ZERO:
 		w.size = size_hint
+	if Layout.is_phone() and not w.has_meta("phone_sized"):
+		# Dialogs were laid out for a desktop; enlarge them for the bigger phone text, within the screen.
+		w.set_meta("phone_sized", true)
+		var area := get_viewport_rect().size
+		var s := Layout.ui_scale()
+		w.size = Vector2i(minf(w.size.x * s, area.x * 0.96), minf(w.size.y * s, area.y * 0.88))
 	w.popup_centered()
 
 func _action_preferences() -> void: _popup(_prefs)
@@ -412,7 +550,10 @@ func _action_select_map() -> void:
 		(tabs[0] as TabContainer).current_tab = 1
 
 func _action_reset_view() -> void:
-	_globe.reset_view()
+	if _flat.visible:
+		_flat.reset_view()
+	else:
+		_globe.reset_view()
 
 func _action_snapshot() -> void:
 	var d := Time.get_datetime_dict_from_system()
@@ -442,6 +583,21 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 		"color_background":
 			_bg.color = Settings.get_color("color_background")
 
+## Recompute the positions that depend on the safe-area insets (after the phone is rotated).
+func _relayout() -> void:
+	if not Layout.is_phone():
+		return
+	var ins := _insets()
+	_content.offset_top = _toolbar_height() + _menu_height() + ins.y
+	_menu_bar.offset_top = ins.y
+	_menu_bar.offset_bottom = ins.y + _menu_height()
+	_toolbar_bar.offset_top = _menu_height() + ins.y
+	_toolbar_bar.offset_bottom = _menu_height() + ins.y + _toolbar_height()
+	_fps_label.offset_right = -14 - ins.z
+	var bottom_gap := 12.0 * Layout.ui_scale() + ins.w
+	_status.offset_bottom = -bottom_gap
+	_status.offset_top = -bottom_gap - (2.0 * Layout.font(22, 0.85) * 1.5 + 36.0)
+
 func _apply_view_type() -> void:
 	var view := Settings.get_string("view_type")
 	var is_globe := view == Settings.VIEW_GLOBE or view == Settings.VIEW_CUBIC
@@ -453,16 +609,10 @@ func _apply_view_type() -> void:
 		var b: Button = _view_buttons[key]
 		b.icon = b.get_meta("selected") if key == view else b.get_meta("normal")
 	_lock_button.icon = load(ICON_DIR + ("LockWorldIcon" if Settings.get_bool("world_locked") else "UnlockWorldIcon") + ".png")
-	# The time label sits opposite the sun: at the bottom for the south-centered map.
-	if view == Settings.VIEW_FLAT_SOUTH:
-		_time_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-		_time_label.offset_top = -126
-		_time_label.offset_bottom = -62
-		_status.visible = Settings.get_bool("show_status_bar")
-	else:
-		_time_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
-		_time_label.offset_top = 8
-		_time_label.offset_bottom = 72
+	# The time label is at the top on every map.
+	_time_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	_time_label.offset_top = 8
+	_time_label.offset_bottom = 8 + 64 * maxf(1.0, Layout.ui_scale() * 0.7)
 
 func _on_hover(lat: float, lon: float, over: bool) -> void:
 	if over:
@@ -510,9 +660,6 @@ func _on_quake_chosen(lat: float, lon: float) -> void:
 func _on_new_quake(q: Dictionary) -> void:
 	if q["magnitude"] < Settings.get_float("quake_min_magnitude"):
 		return
-	var d := Time.get_datetime_dict_from_unix_time(int(q["time"]))
-	_status.post("New quake: M %.1f - %s, %04d-%02d-%02d %02d:%02d:%02d GMT" % [q["magnitude"], q["place"],
-		d["year"], d["month"], d["day"], d["hour"], d["minute"], d["second"]], 8.0)
 	if Settings.get_bool("enable_sounds"):
 		var file := Settings.get_string("quake_sound")
 		if not _sounds.has(file):
@@ -520,6 +667,13 @@ func _on_new_quake(q: Dictionary) -> void:
 		if _sounds[file] != null:
 			_player.stream = _sounds[file]
 			_player.play()
+
+## Like Flatland, the biggest new quake stays in the status bar (for ten minutes) whenever
+## nothing else is being shown.
+func _on_biggest_new_quake(q: Dictionary) -> void:
+	var d := Time.get_datetime_dict_from_unix_time(int(q["time"]))
+	_status.push("New quake: M %.1f %s, %04d-%02d-%02d %02d:%02d:%02d GMT" % [q["magnitude"], q["place"],
+		d["year"], d["month"], d["day"], d["hour"], d["minute"], d["second"]], 600.0)
 
 func _update_debug_grid() -> void:
 	if not _debug_grid.visible:
@@ -541,7 +695,16 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			KEY_5: Settings.set_value("view_type", Settings.VIEW_CUBIC)
 			KEY_R: _action_reset_view()
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if _flat.visible:
+		# Tell the flat map how much room the clock (top) and the status bar (bottom) take, so it fills the rest.
+		var pad := 14.0 * Layout.ui_scale()
+		_flat.reserved_top = _time_label.position.y + _time_label.size.y + pad
+		_flat.reserved_bottom = (-_status.offset_top if _status.visible else 0.0) + pad
+	_fps_accum += delta
+	if _fps_accum >= 0.5 and _fps_label.visible:
+		_fps_accum = 0.0
+		_fps_label.text = "%d FPS" % int(Engine.get_frames_per_second())
 	if _resize_to != "" and _shot_frames == 100:
 		var wh := _resize_to.split("x")
 		get_window().size = Vector2i(int(wh[0]), int(wh[1]))
@@ -555,6 +718,7 @@ func _process(_delta: float) -> void:
 func _open_for_test(what: String) -> void:
 	match what:
 		"prefs": _action_preferences()
+		"satellites": _popup(_satellites)
 		"map": _action_select_map()
 		"about": _action_about()
 		"times": _action_times()

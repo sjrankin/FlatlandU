@@ -1,3 +1,4 @@
+class_name FlatView
 extends Control
 ## Flatland's flat modes: the north-centered and south-centered polar maps, and the
 ## equirectangular ("Rectangular") map. The map turns with the Earth beneath a fixed day/night
@@ -8,6 +9,8 @@ signal location_clicked(lat: float, lon: float)
 
 
 var view_type := Settings.VIEW_FLAT_NORTH
+## When shown on a plane in 3D (FlatStage) the stage draws the sun and handles the mouse.
+var stage_mode := false
 
 var _map_tex: Texture2D
 var _map_file := ""
@@ -34,7 +37,7 @@ func _ready() -> void:
 	_night.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_night)
 	CityDB.user_data_changed.connect(queue_redraw)
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	mouse_filter = Control.MOUSE_FILTER_IGNORE if stage_mode else Control.MOUSE_FILTER_STOP
 	Settings.changed.connect(_on_setting_changed)
 	MapCatalog.texture_ready.connect(_on_texture_ready)
 	QuakeService.quakes_updated.connect(func(_q: Array) -> void: queue_redraw())
@@ -72,7 +75,7 @@ func _request_map() -> void:
 		Settings.VIEW_FLAT_NORTH: _map_file = m["north"]
 		Settings.VIEW_FLAT_SOUTH: _map_file = m["south"]
 		_: _map_file = m["globe"]
-	_light = clampf(float(m.get("light", 1.0)), 0.3, 1.0)
+	_light = 1.0   # maps are shown at full brightness (the per-map multiplier made them too dark)
 	_sea_file = str(m.get("sea", "")) if view_type == Settings.VIEW_RECT else ""
 	if _sea_file != "":
 		var st := MapCatalog.request(_sea_file)
@@ -109,8 +112,8 @@ func _on_texture_ready(file_name: String, tex: Texture2D) -> void:
 	queue_redraw()
 
 func _process(delta: float) -> void:
-	if visible and Settings.get_bool("enable_earthquakes"):
-		queue_redraw()   # animate the radiating rings
+	if visible and (Settings.get_bool("enable_earthquakes") or Settings.get_bool("show_satellites")):
+		queue_redraw()   # animate the radiating rings and the moving satellites
 	_tick += delta
 	if _tick >= 1.0:
 		_tick = 0.0
@@ -129,13 +132,26 @@ func _is_polar() -> bool:
 	return view_type == Settings.VIEW_FLAT_NORTH or view_type == Settings.VIEW_FLAT_SOUTH
 
 func _center() -> Vector2:
-	return size * 0.5 + Vector2(0, 24)
+	return size * 0.5
 
+## The polar map is kept well inside the picture so the hour ring and the clock have room around it.
 func _map_radius() -> float:
-	return minf(size.x, size.y) * 0.37
+	return minf(size.x, size.y) * 0.39
+
+## Offset of an object's shadow on the map: away from the sun, longer for taller objects. The shadows are in
+## relation to the sun's position, not to a scene light.
+func _shadow_offset(p: Vector2, height: float) -> Vector2:
+	var away := p - sun_picture_position()
+	if away.length() < 1.0:
+		away = Vector2(1.0, 1.0)
+	return away.normalized() * height * _k()
+
+## Where the sun is, in picture pixels (used by the 3D stage to float the sun above the map).
+func sun_picture_position() -> Vector2:
+	return project(_decl, _sub_lon)      # over the sub-solar point on every flat map
 
 func _rect_map() -> Rect2:
-	var w := minf(size.x * 0.94, (size.y - 150.0 * _k()) * 2.0)
+	var w := minf(size.x * 0.97, (size.y - 130.0 * _k()) * 2.0)
 	var h := w * 0.5
 	return Rect2((size.x - w) * 0.5, (size.y - h) * 0.5 + 8.0, w, h)
 
@@ -191,9 +207,10 @@ func _draw() -> void:
 	_draw_cities()
 	_draw_pois()
 	_draw_quakes()
+	_draw_satellites()
 
 func _night_alpha() -> float:
-	return float(Settings.NIGHT_ALPHA.get(Settings.get_string("night_darkness"), 0.4))
+	return float(Settings.NIGHT_ALPHA.get(Settings.get_string("night_darkness"), 0.4)) * 0.7   # lighter than before
 
 func _draw_polar() -> void:
 	var c := _center()
@@ -224,7 +241,7 @@ func _draw_polar_grid() -> void:
 		lat_lines.append_array([66.5633, -66.5633])
 	for lat in lat_lines:
 		var r: float = rad * ((90.0 - lat) / 180.0 if view_type == Settings.VIEW_FLAT_NORTH else (90.0 + lat) / 180.0)
-		draw_arc(c, r, 0.0, TAU, 128, _grid_col(), 3.0, true)
+		draw_arc(c, r, 0.0, TAU, 128, _grid_col(), 1.5, true)
 	if Settings.get_bool("show_minor_grid"):
 		for k in range(24):
 			var lon := 15.0 * k
@@ -236,15 +253,17 @@ func _draw_polar_grid() -> void:
 			else:
 				a = project(90.0, lon)
 				b = c
-			draw_line(b, a, _grid_col(), 3.0, true)
+			draw_line(b, a, _grid_col(), 1.5, true)
 	if Settings.get_bool("show_noon_meridians"):
 		var dir := Vector2(0, 1) if view_type == Settings.VIEW_FLAT_NORTH else Vector2(0, -1)
-		draw_line(c, c + dir * rad, Settings.get_color("color_grid"), 5.0, true)
+		draw_line(c, c + dir * rad, Settings.get_color("color_grid"), 2.5, true)
 
 func _sun_direction() -> Vector2:
 	return Vector2(0, 1) if view_type == Settings.VIEW_FLAT_NORTH else Vector2(0, -1)
 
 func _draw_polar_hours() -> void:
+	if stage_mode:
+		return      # on the 3D stage the hours are extruded 3D text (see hour_label_specs)
 	var kind := Settings.get_string("hour_type")
 	if kind == Settings.HOURS_NONE:
 		return
@@ -283,6 +302,59 @@ func _draw_polar_hours() -> void:
 		draw_string(_font, Vector2(-w * 0.5, fsize * 0.35), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Settings.get_color("color_hours_2d"))
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
+## The hour labels as data, for the 3D stage to build extruded text from: an Array of
+## {"text", "pos" (picture pixels, the centre of the text), "rot" (radians, canvas rotation), "size" (pixels)}.
+func hour_label_specs() -> Array:
+	var out: Array = []
+	var kind := Settings.get_string("hour_type")
+	if kind == Settings.HOURS_NONE:
+		return out
+	var utc_hours := fposmod(_now, 86400.0) / 3600.0
+	if _is_polar():
+		var c := _center()
+		var rad := _map_radius() * 1.16
+		for k in range(24):
+			var ang_ccw: float
+			var text := ""
+			match kind:
+				Settings.HOURS_NOON:
+					ang_ccw = _noon_angle(k)
+					text = "+0" if k == 0 else ("%+d" % (k if k <= 12 else k - 24)).replace("-", "−")
+				Settings.HOURS_SOLAR:
+					ang_ccw = _noon_angle(k)
+					text = "%02d:00" % ((12 + k) % 24)
+				Settings.HOURS_LOCATION:
+					var home_lon := Settings.get_float("home_longitude")
+					ang_ccw = _angle_of_lon(home_lon + 15.0 * k)
+					text = "Home" if k == 0 else ("%+d" % (k if k <= 12 else k - 24)).replace("-", "−")
+				_:
+					var lon := 15.0 * k
+					ang_ccw = _angle_of_lon(lon)
+					var h := fposmod(utc_hours + lon / 15.0, 24.0)
+					text = "%d:%02d" % [int(h), int((h - floor(h)) * 60.0)]
+			var a := deg_to_rad(ang_ccw)
+			var rot := -(a - PI / 2.0)
+			if sin(a) < 0.0:
+				rot += PI
+			out.append({"text": text, "pos": c + Vector2(cos(a), -sin(a)) * rad, "rot": rot, "size": 26.0 * _k()})
+	else:
+		var r := _rect_map()
+		for k in range(24):
+			var lon := wrapf(-180.0 + 7.5 + 15.0 * k, -180.0, 180.0)
+			var text := ""
+			match kind:
+				Settings.HOURS_WALL:
+					var h := fposmod(utc_hours + lon / 15.0, 24.0)
+					text = "%d:%02d" % [int(h), int((h - floor(h)) * 60.0)]
+				Settings.HOURS_SOLAR:
+					var h := fposmod(12.0 + (lon - _sub_lon) / 15.0, 24.0)
+					text = "%02d:00" % int(h)
+				_:
+					var off := int(round(wrapf((lon - _sub_lon) / 15.0, -12.0, 12.0)))
+					text = "+0" if off == 0 else ("%+d" % off).replace("-", "−")
+			out.append({"text": text, "pos": Vector2(project(0.0, lon).x, r.end.y + 26.0 * _k() - 6.0 * _k()), "rot": 0.0, "size": 20.0 * _k()})
+	return out
+
 ## Screen angle (CCW degrees) of the meridian at `lon` for the current map rotation.
 func _angle_of_lon(lon: float) -> float:
 	if view_type == Settings.VIEW_FLAT_NORTH:
@@ -296,7 +368,7 @@ func _noon_angle(k: int) -> float:
 	return 90.0 - 15.0 * k
 
 func _draw_sun() -> void:
-	if not Settings.get_bool("show_sun"):
+	if stage_mode or not Settings.get_bool("show_sun"):
 		return
 	var c := _center()
 	var rad := _map_radius() * 1.27
@@ -323,22 +395,22 @@ func _draw_rectangular() -> void:
 		if Settings.get_bool("show_polar_circles"): lat_lines.append_array([66.5633, -66.5633])
 		for lat in lat_lines:
 			var y := project(lat, 0.0).y
-			draw_line(Vector2(r.position.x, y), Vector2(r.end.x, y), _grid_col(), 3.0)
+			draw_line(Vector2(r.position.x, y), Vector2(r.end.x, y), _grid_col(), 1.5)
 		if Settings.get_bool("show_minor_grid"):
 			for k in range(-11, 12):
 				var x := project(0.0, 15.0 * k).x
-				draw_line(Vector2(x, r.position.y), Vector2(x, r.end.y), _grid_col(), 3.0)
+				draw_line(Vector2(x, r.position.y), Vector2(x, r.end.y), _grid_col(), 1.5)
 	# Sun at the sub-solar point, noon meridian marker.
 	var sun_pt := project(_decl, _sub_lon)
 	if Settings.get_bool("show_noon_meridians"):
-		draw_line(Vector2(sun_pt.x, r.position.y), Vector2(sun_pt.x, r.end.y), Settings.get_color("color_grid"), 2.5)
-	if Settings.get_bool("show_sun"):
+		draw_line(Vector2(sun_pt.x, r.position.y), Vector2(sun_pt.x, r.end.y), Settings.get_color("color_grid"), 1.25)
+	if Settings.get_bool("show_sun") and not stage_mode:
 		var d := r.size.y * 0.1
 		if _sun_tex_up != null:
 			draw_texture_rect(_sun_tex_up, Rect2(sun_pt - Vector2(d, d) * 0.5, Vector2(d, d)), false)
 	# Hour labels along the bottom edge.
 	var kind := Settings.get_string("hour_type")
-	if kind != Settings.HOURS_NONE:
+	if kind != Settings.HOURS_NONE and not stage_mode:
 		var utc_hours := fposmod(_now, 86400.0) / 3600.0
 		for k in range(24):
 			var lon := wrapf(-180.0 + 7.5 + 15.0 * k, -180.0, 180.0)
@@ -364,9 +436,10 @@ func _draw_cities() -> void:
 	var names := Settings.get_bool("show_city_names")
 	for city in CityDB.filtered_cities():
 		var p := project(city["Latitude"], city["Longitude"])
-		if Settings.get_bool("show_shadows"):
-			draw_circle(p + Vector2(1.5, 2.0) * _k(), 4.5 * _k(), Color(0, 0, 0, 0.55))
-		draw_circle(p, 4.5 * _k(), Settings.get_color("color_city_2d"))
+		if not stage_mode:     # on the 3D stage the city is a 3D shape, not a dot
+			if Settings.get_bool("show_shadows"):
+				draw_circle(p + _shadow_offset(p, 3.5), 4.5 * _k(), Color(0, 0, 0, 0.5))
+			draw_circle(p, 4.5 * _k(), Settings.get_color("color_city_2d"))
 		var pop := maxi(int(city.get("Population", 0)), int(city.get("MetropolitanPopulation", 0)))
 		if names:
 			var day := Solar.is_daylight(city["Latitude"], city["Longitude"], _now)
@@ -435,9 +508,51 @@ func _draw_quakes() -> void:
 			var dur: float = 1.0 + (1.0 - q["magnitude"] / 10.0)
 			var ph: float = fposmod(Time.get_ticks_msec() / 1000.0, dur) / dur
 			draw_arc(p, (4.0 + 22.0 * ph) * _k(), 0.0, TAU, 32, Color(1.0, 0.627, 0.5, 0.8 * (1.0 - ph)), 3.0 * _k(), true)
-		draw_circle(p, (3.0 + q["magnitude"] * 0.7) * _k(), Color(col, 0.55))
-		draw_arc(p, (3.0 + q["magnitude"] * 0.7) * _k(), 0.0, TAU, 20, col, 1.0, true)
+		if not stage_mode:     # on the 3D stage the earthquake is a 3D shape; its ring and number stay
+			draw_circle(p + _shadow_offset(p, 3.0 + q["magnitude"] * 0.6), (3.0 + q["magnitude"] * 0.7) * _k(), Color(0, 0, 0, 0.4))
+			draw_circle(p, (3.0 + q["magnitude"] * 0.7) * _k(), Color(col, 0.55))
+			draw_arc(p, (3.0 + q["magnitude"] * 0.7) * _k(), 0.0, TAU, 20, col, 1.0, true)
 		draw_string(_font, p + Vector2(8, -8), "%.1f" % q["magnitude"], HORIZONTAL_ALIGNMENT_LEFT, -1, int(26 * _k()), col)
+
+## Satellites: a pill-shaped body with two solar panels, turned along the satellite's track, and a small
+## label (name and altitude) beside it.
+func _draw_satellites() -> void:
+	if stage_mode or not Settings.get_bool("show_satellites"):
+		return      # on the 3D stage satellites are 3D models floating over the map
+	var k := _k()
+	for s in SatelliteService.positions(Solar.now()):
+		var p := project(float(s["lat"]), float(s["lon"]))
+		var q := project(float(s["next_lat"]), float(s["next_lon"]))
+		var heading := 0.0
+		if p.distance_to(q) < 100.0 * k:      # not across the map edge or a polar jump
+			heading = (q - p).angle()
+		# The shadow falls away from the sun, farther the higher the satellite is.
+		var shadow_height := minf(float(s["alt_km"]) / 40.0, 45.0) + 8.0
+		_draw_satellite_shape(p + _shadow_offset(p, shadow_height), heading, true)
+		_draw_satellite_shape(p, heading, false)
+		var text := "%s  %s" % [s["label"], SatelliteService.format_altitude(float(s["alt_km"]))]
+		draw_string_outline(_font, p + Vector2(20.0, -12.0) * k, text, HORIZONTAL_ALIGNMENT_LEFT, -1, int(15 * k), 5, Color.BLACK)
+		draw_string(_font, p + Vector2(20.0, -12.0) * k, text, HORIZONTAL_ALIGNMENT_LEFT, -1, int(15 * k), Color("#fff2b0"))
+
+## A pill-shaped body with two solar panels, drawn at `p` along `heading`; as a dark silhouette for a shadow.
+func _draw_satellite_shape(p: Vector2, heading: float, shadow: bool) -> void:
+	var k := _k()
+	var body := StyleBoxFlat.new()
+	body.bg_color = Color(0, 0, 0, 0.4) if shadow else Color("#e4e4ea")
+	body.border_color = Color(0, 0, 0, 0.0) if shadow else Color("#50505a")
+	body.set_border_width_all(0 if shadow else 1)
+	body.set_corner_radius_all(int(6 * k))
+	var panel_fill := Color(0, 0, 0, 0.4) if shadow else Color("#1d4fb5")
+	var panel_edge := Color("#0b2766")
+	draw_set_transform(p, heading, Vector2.ONE)
+	for side in [-1.0, 1.0]:
+		var panel := Rect2(Vector2(-6.0 * k, (4.0 if side > 0.0 else -22.0) * k), Vector2(12.0 * k, 18.0 * k))
+		draw_rect(panel, panel_fill)
+		if not shadow:
+			draw_rect(panel, panel_edge, false, 1.0)
+			draw_line(panel.position + Vector2(panel.size.x * 0.5, 0.0), panel.position + Vector2(panel.size.x * 0.5, panel.size.y), panel_edge, 1.0)
+	draw_style_box(body, Rect2(Vector2(-14.0 * k, -5.0 * k), Vector2(28.0 * k, 10.0 * k)))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 # MARK: - Input
 

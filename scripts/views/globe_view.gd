@@ -8,9 +8,9 @@ signal location_clicked(lat: float, lon: float)
 
 const R := Geo.GLOBE_RADIUS
 # Camera as in FlatlandView: a perspective camera 175 units away with a roughly 9 to 10 degree field of view
-# (nearly orthographic), zoom limited to 60 (Defaults.ClosestZ) at the near end.
+# (nearly orthographic). FlatlandView stops zooming at 60 (Defaults.ClosestZ); here the user can go in to 20.
 const DEFAULT_DISTANCE := 175.0
-const MIN_DISTANCE := 60.0
+const MIN_DISTANCE := 20.0
 const MAX_DISTANCE := 500.0
 const CAMERA_FOV := 9.0
 
@@ -27,6 +27,10 @@ var _camera: Camera3D
 var _sun: DirectionalLight3D
 var _moon: DirectionalLight3D
 var _env: Environment
+var _sky_mesh: MeshInstance3D       # star field sphere (with the sun) centred on the camera
+var _sky_mat: ShaderMaterial
+var _stars_node: MeshInstance3D     # the 2000 brightest stars, positioned at the camera
+var _stars_mat: ShaderMaterial
 var _cities_node: Node3D
 var _quakes_node: Node3D
 var _hours_earth: Node3D
@@ -40,6 +44,8 @@ var _cubic := false
 var _poles: Node3D
 var _pole_shafts: Array = []        # [north, south] striped shafts that spin like barber poles
 var _dn_items: Array = []           # nodes whose material follows day/night: {node, lat, lon, day, night}
+var _sat_node: Node3D                # satellites, in the Earth's frame
+var _sat_items: Dictionary = {}     # NORAD id -> {holder, label, km}
 var _arrows: Array = []             # animated earthquake arrows (spin about their axis)
 var _mat_cache: Dictionary = {}
 var _pois_node: Node3D
@@ -49,6 +55,11 @@ var _pan := Vector2.ZERO            # screen-plane offset of the camera (command
 var _pitch := 0.0
 var _distance := DEFAULT_DISTANCE
 var _dragging := false
+var _intro: IntroText
+const EARTH_SHADOW_LAYER := 1 << 19
+const NIGHT_LAYER := 1 << 1   # night-side objects: not lit by the sun
+var _tap_start := Vector2.ZERO
+const TAP_SLOP := 6.0   # pixels a tap may move and still count as a tap
 var _last_hour_stamp := -1
 var _tick := 0.0
 var _attract_angle := 0.0
@@ -125,6 +136,7 @@ func _build_scene() -> void:
 	var caster := MeshInstance3D.new()
 	caster.mesh = _make_sphere_mesh(R - 0.3, 64, 32)
 	caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	caster.layers = EARTH_SHADOW_LAYER   # lets the 3D-shadows option keep this one while turning the rest off
 	_earth.add_child(caster)
 
 	# Maps with transparent seas (Standard, etc.) sit on top of a sea sphere, as in Flatland.
@@ -145,6 +157,7 @@ func _build_scene() -> void:
 	_grid_node = _child(_earth, "Grid")
 	_sites_node = _child(_earth, "HeritageSites")
 	_pois_node = _child(_earth, "POIs")
+	_sat_node = _child(_earth, "Satellites")
 	_regions_node = _child(_earth, "Regions")
 	_hours_fixed = _child(_fixed, "HoursFixed")
 
@@ -153,16 +166,20 @@ func _build_scene() -> void:
 
 	_build_poles()
 	_build_cube()
+	if Settings.get_bool("show_intro"):
+		show_intro()
 
 	_sun = DirectionalLight3D.new()
-	_sun.light_energy = 1.6
+	_sun.light_energy = 0.8
 	_sun.light_color = Color.WHITE
+	_sun.light_cull_mask = 0xFFFFF & ~NIGHT_LAYER
 	_sun.shadow_enabled = true
 	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	_sun.directional_shadow_max_distance = 215.0
 	_sun.shadow_bias = 0.03
 	_sun.shadow_normal_bias = 0.5
 	_sun.shadow_opacity = 0.75
+	_apply_shadows()
 	add_child(_sun)
 
 	_moon = DirectionalLight3D.new()
@@ -180,6 +197,7 @@ func _build_scene() -> void:
 	_camera.position = Vector3(0, 0, _distance)
 	_orbit.add_child(_camera)
 	_camera.current = true
+	_build_sky()
 
 func _child(parent: Node, node_name: String) -> Node3D:
 	var n := Node3D.new()
@@ -234,7 +252,7 @@ func _build_poles() -> void:
 	gold.albedo_color = Color("#ffcf40")
 	gold.metallic = 1.0
 	gold.metallic_specular = 1.0
-	gold.roughness = 0.2
+	gold.roughness = 0.45
 	gold.emission_enabled = true
 	gold.emission = Color("#4a3400")
 	_poles = Node3D.new()
@@ -277,8 +295,13 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 		"show_moon_light":
 			_moon.visible = Settings.get_bool("show_moon_light")
 			_update_time(false)
-		"show_stars":
+		"show_stars", "show_sun":
 			_apply_stars()
+		"show_satellites":
+			_sat_node.visible = Settings.get_bool("show_satellites")
+			_apply_camera()
+		"show_shadows_3d":
+			_apply_shadows()
 		"enable_earthquakes", "quake_min_magnitude", "quake_max_age_days", "quake_shape", "quake_scale", \
 		"quake_indicator", "quake_highlight_new", "quake_recent_hours":
 			_rebuild_quakes()
@@ -338,19 +361,199 @@ func _set_tex(mat: ShaderMaterial, tex: Texture2D) -> void:
 	mat.set_shader_parameter("albedo_tex", tex)
 	mat.set_shader_parameter("use_tex", true)
 
+## Turn the 3D shadows cast by labels, cities and the like on or off. The invisible sphere that
+## shades the night side is on its own layer and always keeps casting, so night-side objects stay dark.
+func _apply_shadows() -> void:
+	_sun.shadow_caster_mask = 0xFFFFF if Settings.get_bool("show_shadows_3d") else EARTH_SHADOW_LAYER
+
+## The star field sphere. It is centred on (and moves with) the camera, sits just beyond everything
+## else in the scene, and shows the sky a viewer at the camera's position would see, plus the sun.
+func _build_sky() -> void:
+	_sky_mat = ShaderMaterial.new()
+	_sky_mat.shader = load("res://shaders/sky.gdshader")
+	_sky_mat.render_priority = -100
+	var sphere := SphereMesh.new()
+	sphere.radius = 1.0
+	sphere.height = 2.0
+	sphere.radial_segments = 96
+	sphere.rings = 48
+	_sky_mesh = MeshInstance3D.new()
+	_sky_mesh.name = "StarField"
+	_sky_mesh.mesh = sphere
+	_sky_mesh.material_override = _sky_mat
+	_sky_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_sky_mesh.extra_cull_margin = 16384.0
+	_camera.add_child(_sky_mesh)
+	_build_stars()
+
+## The stars: the 2000 brightest (HYG catalogue, data/bright_stars.json) plotted by right ascension
+## and declination as round points on a sphere centred on the camera. Stars are at infinity, so a
+## viewer at the camera's position sees them by direction only.
+signal star_tooltip_changed(text: String, position: Vector2)
+const STAR_HOVER_SLOP := 10.0   # pixels
+var _star_dirs: Array[Vector3] = []
+var _star_info: Array = []
+var _last_star_tip := ""
+var _stars_basis := Basis.IDENTITY
+
+## Tooltip text for the star under `mouse` (within a few pixels), or "" if there is none.
+func star_tooltip_at(mouse: Vector2) -> String:
+	if _stars_node == null or not _stars_node.visible or _star_dirs.is_empty():
+		return ""
+	var cam_pos := _camera.global_position
+	var best := -1
+	var best_dist := STAR_HOVER_SLOP
+	for i in range(_star_dirs.size()):
+		var dir := (_stars_basis * _star_dirs[i]).normalized()
+		if _camera.is_position_behind(cam_pos + dir * 1000.0):
+			continue
+		var d := mouse.distance_to(_camera.unproject_position(cam_pos + dir * 1000.0))
+		if d >= best_dist:
+			continue
+		if _star_obscured(cam_pos, dir):
+			continue
+		best = i
+		best_dist = d
+	if best < 0:
+		return ""
+	var info: Array = _star_info[best]
+	var lines: PackedStringArray = []
+	if str(info[4]) != "":
+		lines.append(str(info[4]))
+	lines.append("Brightness: magnitude %.2f" % float(info[2]))
+	lines.append("Type: %s" % (str(info[5]) if str(info[5]) != "" else "unknown"))
+	return "\n".join(lines)
+
+## True if something in front of the sky (globe, poles, sun, welcome text) hides the star in `dir`.
+func _star_obscured(cam_pos: Vector3, dir: Vector3) -> bool:
+	# The globe (with a little margin for the sea, grid and markers).
+	if _ray_hits_sphere(cam_pos, dir, Vector3.ZERO, Geo.GLOBE_RADIUS + 0.3):
+		return true
+	# The polar poles: a thin shaft along the (tilted) axis with a ball at each end.
+	var axis := _system.global_basis.y.normalized()
+	for sign_y: float in [-1.0, 1.0]:
+		if _ray_hits_sphere(cam_pos, dir, axis * 12.0 * sign_y, 0.6):
+			return true
+	if _ray_segment_distance(cam_pos, dir, axis * -12.0, axis * 12.0) < 0.3:
+		return true
+	# The sun's disk and glow (it lies in the +Z direction).
+	if Settings.get_bool("show_sun") and dir.angle_to(Vector3(0, 0, 1)) < deg_to_rad(0.8):
+		return true
+	# The welcome text, while it is showing.
+	if is_instance_valid(_intro) and _intro.occludes(cam_pos, dir):
+		return true
+	return false
+
+static func _ray_hits_sphere(origin: Vector3, dir: Vector3, center: Vector3, radius: float) -> bool:
+	var oc := origin - center
+	var b := oc.dot(dir)
+	var disc := b * b - (oc.length_squared() - radius * radius)
+	return disc > 0.0 and -b + sqrt(disc) > 0.0
+
+## Shortest distance between the ray (origin + t * dir, t >= 0) and the segment a-b.
+static func _ray_segment_distance(origin: Vector3, dir: Vector3, a: Vector3, b: Vector3) -> float:
+	var seg := b - a
+	var w := origin - a
+	var dd := dir.dot(dir)
+	var ds := dir.dot(seg)
+	var ss := seg.dot(seg)
+	var denom := dd * ss - ds * ds
+	var t := 0.0
+	var u := clampf(w.dot(seg) / ss, 0.0, 1.0)
+	if absf(denom) > 1e-9:
+		t = maxf((ds * w.dot(seg) - ss * w.dot(dir)) / denom, 0.0)
+		u = clampf((w.dot(seg) + t * ds) / ss, 0.0, 1.0)
+	return (origin + dir * t).distance_to(a + seg * u)
+
+func _update_star_tooltip(mouse: Vector2) -> void:
+	if OS.get_name() != "macOS":
+		return
+	var tip := star_tooltip_at(mouse)
+	if tip != _last_star_tip:
+		_last_star_tip = tip
+		star_tooltip_changed.emit(tip, mouse)
+
+var _sky_radius := 200.0
+var _pixel_angle := 0.0002
+
+## Centre the star sphere on the camera and orient it for the current time.
+func _place_stars() -> void:
+	if _stars_node == null:
+		return
+	_stars_node.global_transform = Transform3D(_stars_basis.scaled(Vector3.ONE * _sky_radius), _camera.global_position)
+	_stars_mat.set_shader_parameter("pixel_angle", _pixel_angle)
+
+func _build_stars() -> void:
+	var rows: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://data/bright_stars.json"))
+	if not (rows is Array):
+		return
+	var verts := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var colors := PackedColorArray()
+	var sizes := PackedVector2Array()
+	var indices := PackedInt32Array()
+	var corners := [Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1)]
+	for row in rows:
+		_star_dirs.append(Vector3(cos(deg_to_rad(float(row[1]))) * sin(deg_to_rad(float(row[0]))), sin(deg_to_rad(float(row[1]))), cos(deg_to_rad(float(row[1]))) * cos(deg_to_rad(float(row[0])))))
+		_star_info.append(row)
+		var ra := deg_to_rad(float(row[0]))
+		var dec := deg_to_rad(float(row[1]))
+		var mag := float(row[2])
+		var d := Vector3(cos(dec) * sin(ra), sin(dec), cos(dec) * cos(ra))
+		var size_px := clampf(7.0 - 1.2 * mag, 4.5, 14.0)           # brighter stars are bigger
+		var bright := clampf(1.4 - 0.15 * mag, 0.75, 1.0)
+		var c := _star_color(float(row[3])) * bright
+		var base := verts.size()
+		for k in range(4):
+			verts.append(d)
+			uvs.append(corners[k])
+			colors.append(Color(c.r, c.g, c.b, 1.0))
+			sizes.append(Vector2(size_px, 0.0))
+		indices.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_TEX_UV2] = sizes
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	_stars_mat = ShaderMaterial.new()
+	_stars_mat.shader = load("res://shaders/stars.gdshader")
+	_stars_mat.render_priority = -90
+	_stars_node = MeshInstance3D.new()
+	_stars_node.name = "Stars"
+	_stars_node.mesh = mesh
+	_stars_node.material_override = _stars_mat
+	_stars_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_stars_node.extra_cull_margin = 16384.0
+	add_child(_stars_node)
+	_apply_stars()
+
+## Approximate star colour from its B-V colour index: blue-white to yellow to orange-red.
+func _star_color(bv: float) -> Color:
+	var blue := Color(0.5, 0.65, 1.0)
+	var white := Color(0.95, 0.95, 1.0)
+	var yellow := Color(1.0, 0.88, 0.45)
+	var orange := Color(1.0, 0.62, 0.28)
+	var red := Color(1.0, 0.38, 0.22)
+	if bv < 0.2:
+		return blue.lerp(white, clampf((bv + 0.2) / 0.4, 0.0, 1.0))
+	if bv < 0.6:
+		return white.lerp(yellow, (bv - 0.2) / 0.4)
+	if bv < 1.2:
+		return yellow.lerp(orange, (bv - 0.6) / 0.6)
+	return orange.lerp(red, clampf((bv - 1.2) / 0.6, 0.0, 1.0))
+
 func _apply_stars() -> void:
-	if Settings.get_bool("show_stars"):
-		var tex := MapCatalog.request("TychoSky.png")
-		if tex != null:
-			var sky_mat := PanoramaSkyMaterial.new()
-			sky_mat.panorama = tex
-			var sky := Sky.new()
-			sky.sky_material = sky_mat
-			_env.sky = sky
-			_env.background_mode = Environment.BG_SKY
-	else:
-		_env.background_mode = Environment.BG_COLOR
-		_env.background_color = Settings.get_color("color_background")
+	if _sky_mat == null:
+		return
+	var sun_on := Settings.get_bool("show_sun")
+	_sky_mesh.visible = sun_on
+	_sky_mat.set_shader_parameter("use_sun", sun_on)
+	if _stars_node != null:
+		_stars_node.visible = Settings.get_bool("show_stars")
 
 # MARK: - Content (cities, grid, hours, quakes)
 
@@ -389,13 +592,22 @@ func _mat_pair(color: Color, glow: Color) -> Array:
 func _register_dn(node: MeshInstance3D, lat: float, lon: float, color: Color, glow: Color) -> void:
 	var pair := _mat_pair(color, glow)
 	_dn_items.append({"node": node, "lat": lat, "lon": lon, "day": pair[0], "night": pair[1]})
-	node.material_override = pair[0] if Solar.is_daylight(lat, lon, Solar.now()) else pair[1]
+	var day_now := Solar.is_daylight(lat, lon, Solar.now())
+	node.material_override = pair[0] if day_now else pair[1]
+	_set_night_layer(node, not day_now)
 
 func _refresh_day_night() -> void:
 	var now := Solar.now()
 	for it in _dn_items:
 		if is_instance_valid(it["node"]):
-			it["node"].material_override = it["day"] if Solar.is_daylight(it["lat"], it["lon"], now) else it["night"]
+			var day_now := Solar.is_daylight(it["lat"], it["lon"], now)
+			it["node"].material_override = it["day"] if day_now else it["night"]
+			_set_night_layer(it["node"], not day_now)
+
+## Objects on the night side are put on their own render layer, which the sun light ignores, so the
+## sun cannot light their sides near the limb. (The moon light and their own glow still apply.)
+func _set_night_layer(node: MeshInstance3D, night: bool) -> void:
+	node.layers = NIGHT_LAYER if night else 1
 
 ## Extruded text lying on the surface, readable from outside, centered on its position.
 func _flat_text(text: String, lat: float, lon: float, radius: float, em: float, depth: float, top_anchor: bool = false, font: Font = null) -> MeshInstance3D:
@@ -578,7 +790,9 @@ func _city_stick(c: Dictionary, col: Color, height: float, mult: float) -> void:
 ## Textured (outlined block) material that also glows at night.
 func _register_outline(node: MeshInstance3D, lat: float, lon: float, col: Color) -> void:
 	_dn_items.append({"node": node, "lat": lat, "lon": lon, "day": Shapes.outline_material(col, false), "night": Shapes.outline_material(col, true)})
-	node.material_override = Shapes.outline_material(col, not Solar.is_daylight(lat, lon, Solar.now()))
+	var is_night := not Solar.is_daylight(lat, lon, Solar.now())
+	node.material_override = Shapes.outline_material(col, is_night)
+	_set_night_layer(node, is_night)
 
 func _rebuild_sites() -> void:
 	_clear(_sites_node)
@@ -688,7 +902,7 @@ func set_cubic(on: bool) -> void:
 		_sea_mesh.visible = _sea_file != ""
 
 ## Grid lines drawn as flat ribbons lying on the globe, so they have a real width (GPU lines are 1 px).
-func _line_mesh(points_list: Array, color: Color, dashed: bool = false, width: float = 0.09) -> MeshInstance3D:
+func _line_mesh(points_list: Array, color: Color, dashed: bool = false, width: float = 0.045) -> MeshInstance3D:
 	var verts := PackedVector3Array()
 	var idx := PackedInt32Array()
 	for pts in points_list:
@@ -715,6 +929,7 @@ func _line_mesh(points_list: Array, color: Color, dashed: bool = false, width: f
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF   # grid lines never cast shadows
 	return mi
 
 func _latitude_circle(lat: float, radius: float, steps: int = 180) -> Array:
@@ -750,7 +965,7 @@ func _rebuild_grid() -> void:
 		var minor: Array = []
 		for k in range(-11, 13):   # every 15°, including 0° and 180°
 			minor.append(_meridian(15.0 * k, lr, 180))
-		_grid_node.add_child(_line_mesh(minor, Settings.get_color("color_grid"), false, 0.09))
+		_grid_node.add_child(_line_mesh(minor, Settings.get_color("color_grid"), false, 0.045))
 
 func _hour_mesh(text: String, size: float, radius: float = 11.5) -> MeshInstance3D:
 	var tm := TextMesh.new()
@@ -803,6 +1018,9 @@ func _rebuild_hours() -> void:
 		basis = basis * Basis(Vector3.BACK, deg_to_rad(-90.0))
 		mi.transform = Transform3D(basis, Geo.to_vec3(0.0, lon, 11.5))
 		parent.add_child(mi)
+		# Fixed labels sit in the sun's frame (the sun is at longitude 0); wall-clock and home labels turn with the Earth.
+		var label_night := not Solar.is_daylight(0.0, lon, utc) if parent == _hours_earth else absf(wrapf(lon, -180.0, 180.0)) > 90.0
+		_set_night_layer(mi, label_night)
 
 ## Earthquakes in the shape chosen in Preferences (Flatland's EarthquakeShapes): animated or static
 ## arrow, sphere, pulsating sphere, pyramid, cone, box, cylinder, capsule or tethered magnitude.
@@ -1104,6 +1322,8 @@ func _process(delta: float) -> void:
 	if vs != _vp_size:
 		_vp_size = vs
 		_apply_camera()
+	_place_stars()
+	_update_satellites()
 	for a in _arrows:
 		if is_instance_valid(a["node"]):
 			(a["node"] as Node3D).rotation.y += a["dir"] * delta     # about 1 radian per second
@@ -1129,6 +1349,10 @@ func _update_time(snap: bool) -> void:
 	if snap:
 		_earth.rotation.y = _earth_angle
 	var decl := deg_to_rad(Solar.declination(now))
+	if _stars_node != null:
+		# Star frame -> scene: spin so the sun's right ascension faces +Z, then apply the seasonal tilt.
+		_stars_basis = Basis(Vector3.RIGHT, decl) * Basis(Vector3.UP, -deg_to_rad(Solar.right_ascension(now)))
+		_place_stars()
 	_system.rotation.x = decl          # tilt the Earth; the sun stays fixed behind the camera
 	var sun_dir := Vector3(0, 0, 1)
 	for mat in [_earth_mat, _sea_mat]:
@@ -1187,9 +1411,18 @@ func _apply_camera() -> void:
 	var cam_z := _distance * fit
 	_camera.position = Vector3(_pan.x, _pan.y, cam_z)
 	# Keep the depth range tight around the globe so shadows stay sharp at this distance.
-	_camera.near = maxf(0.1, cam_z - 40.0)
-	_camera.far = cam_z + 40.0
+	# With satellites on, leave room for the geostationary ring, which is well in front of and behind the globe.
+	var extra := 60.0 if Settings.get_bool("show_satellites") else 0.0
+	_camera.near = maxf(0.1, cam_z - 40.0 - extra)
+	_camera.far = cam_z + 40.0 + extra
 	_sun.directional_shadow_max_distance = cam_z + 40.0
+	if _sky_mesh != null:
+		# Just inside the far plane, beyond everything in the scene.
+		var r := _camera.far - 2.0
+		_sky_mesh.scale = Vector3(r, r, r)
+		_sky_radius = r * 0.99
+		_pixel_angle = deg_to_rad(_camera.fov) / maxf(1.0, vs.y)
+		_place_stars()
 
 ## Rotates the camera so the given location faces the viewer.
 func look_at_location(lat: float, lon: float) -> void:
@@ -1212,7 +1445,86 @@ func set_viewport_size(size: Vector2) -> void:
 func set_mouse_inside(inside: bool) -> void:
 	_mouse_inside = inside
 
+signal intro_changed(showing: bool)
+
+# MARK: - Satellites
+
+const SAT_MAX_RADIUS := 70.0
+
+## A satellite: a pill-shaped body with two solar panels, and a small label (name and altitude) beside it.
+func _make_satellite(short_name: String) -> Dictionary:
+	var item := SatelliteModel.build(short_name)
+	_sat_node.add_child(item["holder"])
+	return item
+
+## Put every satellite where it is now, pointing along its track.
+func _update_satellites() -> void:
+	var on := Settings.get_bool("show_satellites")
+	_sat_node.visible = on
+	if not on:
+		return
+	var now := Solar.now()
+	var shown := {}
+	for s in SatelliteService.positions(now):
+		var id: int = s["id"]
+		shown[id] = true
+		if not _sat_items.has(id):
+			_sat_items[id] = _make_satellite(str(s["label"]))
+		var item: Dictionary = _sat_items[id]
+		# Far satellites are drawn closer than their true distance (the geostationary ring is 6.6 globe radii out).
+		var radius := minf(Geo.GLOBE_RADIUS * (1.0 + float(s["alt_km"]) / SatelliteService.EARTH_RADIUS_KM), SAT_MAX_RADIUS)
+		var here := Geo.to_vec3(float(s["lat"]), float(s["lon"]), radius)
+		var ahead := Geo.to_vec3(float(s["next_lat"]), float(s["next_lon"]), radius)
+		var up := here.normalized()
+		var fwd := (ahead - here)
+		fwd = (fwd - up * fwd.dot(up)).normalized()
+		var side := fwd.cross(up).normalized()
+		(item["holder"] as Node3D).transform = Transform3D(Basis(fwd, up, side), here)
+		var km := int(round(float(s["alt_km"])))
+		if km != item["km"]:
+			item["km"] = km
+			(item["label"] as Label3D).text = "%s  %s" % [item["name"], SatelliteService.format_altitude(float(s["alt_km"]))]
+	for id in _sat_items.keys():
+		((_sat_items[id] as Dictionary)["holder"] as Node3D).visible = shown.has(id)   # untracked: not shown
+
+func is_intro_showing() -> bool:
+	return is_instance_valid(_intro)
+
+## Show the welcome text again (it starts its orbit from the beginning).
+func show_intro(auto_fade: bool = true) -> void:
+	if is_instance_valid(_intro):
+		return
+	_intro = IntroText.new()
+	_intro.auto_fade = auto_fade
+	_fixed.add_child(_intro)
+	_intro.finished.connect(func() -> void: intro_changed.emit(false))
+	intro_changed.emit(true)
+
+## Fade the welcome text out (one second) and remove it.
+func hide_intro() -> void:
+	if is_instance_valid(_intro):
+		_intro.dismiss()
+
+func toggle_intro() -> void:
+	if is_instance_valid(_intro):
+		hide_intro()
+	else:
+		show_intro(false)   # shown on request: stays until the user taps the view or the button
+
+## The welcome text goes away only for a tap (press and release without moving), not for a drag.
+func _check_intro_tap(event: InputEvent) -> void:
+	if not is_instance_valid(_intro) or not (event is InputEventMouseButton):
+		return
+	var mb := event as InputEventMouseButton
+	if mb.button_index != MOUSE_BUTTON_LEFT and mb.button_index != MOUSE_BUTTON_RIGHT and mb.button_index != MOUSE_BUTTON_MIDDLE:
+		return   # wheel zoom is not a tap
+	if mb.pressed:
+		_tap_start = mb.position
+	elif mb.position.distance_to(_tap_start) <= TAP_SLOP:
+		_intro.dismiss()
+
 func handle_gui_input(event: InputEvent) -> void:
+	_check_intro_tap(event)
 	if Settings.get_bool("world_locked"):
 		return
 	if event is InputEventMouseButton:
@@ -1220,6 +1532,9 @@ func handle_gui_input(event: InputEvent) -> void:
 		match mb.button_index:
 			MOUSE_BUTTON_LEFT:
 				_dragging = mb.pressed
+				if mb.pressed and _last_star_tip != "":
+					_last_star_tip = ""
+					star_tooltip_changed.emit("", mb.position)
 				if mb.pressed and _reset_tween != null and _reset_tween.is_valid():
 					_reset_tween.kill()
 				if mb.pressed and mb.double_click:
@@ -1237,6 +1552,8 @@ func handle_gui_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
 		_mouse_pos = mm.position
+		if not _dragging:
+			_update_star_tooltip(mm.position)
 		if _dragging:
 			if mm.meta_pressed or mm.alt_pressed or mm.ctrl_pressed:
 				# Command/Option/Ctrl-drag moves the globe across the view (SceneKit's camera pan).

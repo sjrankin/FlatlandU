@@ -35,6 +35,6 @@ void fragment() {
 void light() {
 	float ndl = dot(normalize(wnormal), normalize(sun_dir));
 	float sun = step(0.5, LIGHT_COLOR.r);
-	float shade = mix(0.8, 1.0, clamp(ndl, 0.0, 1.0));
+	float shade = 0.6 * mix(0.8, 1.0, clamp(ndl, 0.0, 1.0));
 	DIFFUSE_LIGHT += sun * day_amount() * shade * mix(0.3, 1.0, ATTENUATION);
 }

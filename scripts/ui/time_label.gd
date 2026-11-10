@@ -3,11 +3,11 @@ extends Label
 
 func _ready() -> void:
 	horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	var f := SystemFont.new()
-	f.font_names = PackedStringArray(["Menlo", "SF Mono", "Monaco", "Courier New", "monospace"])
-	f.font_weight = 600
-	add_theme_font_override("font", f)
-	add_theme_font_size_override("font_size", 46)
+	# Noto Sans (bundled): its digits are all the same width and its zero is plain, not crossed or dotted, which
+	# the system monospaced fonts (Menlo, SF Mono, Monaco) all have. The same face on every platform.
+	add_theme_font_override("font", Geo.noto(500))
+	_apply_size()
+	get_viewport().size_changed.connect(_apply_size)
 	add_theme_color_override("font_color", Color.WHITE)
 	add_theme_color_override("font_outline_color", Color.BLACK)
 	add_theme_constant_override("outline_size", 6)
@@ -18,6 +18,16 @@ func _ready() -> void:
 	add_child(t)
 	Settings.changed.connect(func(_k: String, _v: Variant) -> void: update_text())
 	update_text()
+
+## The time grows with a big window (and is larger on a phone) so it stays easy to read.
+func _apply_size() -> void:
+	var size_px := 46.0
+	if Layout.is_phone():
+		size_px = 46.0 * Layout.ui_scale() * 0.85
+	else:
+		size_px = 46.0 * clampf(get_viewport().get_visible_rect().size.x / 1280.0, 1.0, 2.5)
+	add_theme_font_size_override("font_size", int(size_px))
+	custom_minimum_size.y = size_px * 1.3
 
 func update_text() -> void:
 	var mode := Settings.get_string("time_label")

@@ -45,6 +45,21 @@ static func declination(unix: float) -> float:
 	var eps := eps0 + 0.00256 * cos(deg_to_rad(omega))
 	return rad_to_deg(asin(sin(deg_to_rad(eps)) * sin(deg_to_rad(app_long))))
 
+## Right ascension of the sun in degrees (0...360).
+static func right_ascension(unix: float) -> float:
+	var t := _centuries(unix)
+	var l0 := fposmod(280.46646 + t * (36000.76983 + t * 0.0003032), 360.0)
+	var m := 357.52911 + t * (35999.05029 - 0.0001537 * t)
+	var mr := deg_to_rad(m)
+	var c := sin(mr) * (1.914602 - t * (0.004817 + 0.000014 * t)) \
+		+ sin(2.0 * mr) * (0.019993 - 0.000101 * t) + sin(3.0 * mr) * 0.000289
+	var omega := 125.04 - 1934.136 * t
+	var app_long := l0 + c - 0.00569 - 0.00478 * sin(deg_to_rad(omega))
+	var eps0 := 23.0 + (26.0 + (21.448 - t * (46.815 + t * (0.00059 - t * 0.001813))) / 60.0) / 60.0
+	var eps := eps0 + 0.00256 * cos(deg_to_rad(omega))
+	var ra := atan2(cos(deg_to_rad(eps)) * sin(deg_to_rad(app_long)), cos(deg_to_rad(app_long)))
+	return fposmod(rad_to_deg(ra), 360.0)
+
 ## Equation of time in minutes.
 static func equation_of_time(unix: float) -> float:
 	var t := _centuries(unix)

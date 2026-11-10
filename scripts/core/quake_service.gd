@@ -4,6 +4,9 @@ extends Node
 
 signal quakes_updated(quakes: Array)
 signal new_quake(quake: Dictionary)
+## The biggest of the quakes that arrived in the latest update, including the first load (Flatland's
+## "New quake" status message).
+signal biggest_new_quake(quake: Dictionary)
 signal fetch_started
 signal fetch_failed(reason: String)
 
@@ -76,9 +79,11 @@ func _on_completed(result: int, code: int, _headers: PackedStringArray, body: Pa
 			"depth": float(c[2]) if c.size() > 2 else 0.0, "url": str(p.get("url", ""))})
 	fresh.sort_custom(func(a, b): return a["time"] > b["time"])
 	var arrivals: Array = []
+	var newcomers: Array = []
 	for q in fresh:
 		if not _known.has(q["id"]):
 			_known[q["id"]] = true
+			newcomers.append(q)
 			if not _first_load:
 				arrivals.append(q)
 	_first_load = false
@@ -87,6 +92,13 @@ func _on_completed(result: int, code: int, _headers: PackedStringArray, body: Pa
 	last_fetch_unix = Time.get_unix_time_from_system()
 	last_status = "OK (%d quakes)" % quakes.size()
 	quakes_updated.emit(visible_quakes())
+	var shown := visible_quakes()
+	var biggest: Dictionary = {}
+	for q in newcomers:
+		if shown.has(q) and (biggest.is_empty() or q["magnitude"] > biggest["magnitude"]):
+			biggest = q
+	if not biggest.is_empty():
+		biggest_new_quake.emit(biggest)
 	for q in arrivals:
 		new_quake.emit(q)
 

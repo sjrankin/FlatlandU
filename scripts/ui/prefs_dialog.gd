@@ -2,6 +2,8 @@ extends Window
 ## Preferences window (counterpart of Flatland's PreferencePanel). Every control applies
 ## immediately and is saved through Settings.
 
+signal open_satellites
+
 func _ready() -> void:
 	title = "Flatland Preferences"
 	size = Vector2i(760, 560)
@@ -50,22 +52,33 @@ func _general(tabs: TabContainer) -> void:
 	p.add_child(SettingControls.option("Time label", "time_label", [["None", "None"], ["UTC", "UTC"], ["Local", "Local"]]))
 	p.add_child(SettingControls.check("Show seconds in the time label", "time_label_seconds"))
 	p.add_child(SettingControls.check("Show status bar", "show_status_bar"))
+	p.add_child(SettingControls.check("Show frames per second (FPS)", "show_fps"))
 	p.add_child(SettingControls.check("Show sun", "show_sun"))
+	p.add_child(SettingControls.check("Show stars", "show_stars"))
 	p.add_child(SettingControls.check("Show shadows under 2D city markers", "show_shadows"))
+	p.add_child(SettingControls.check("Show 3D shadows (labels, cities, earthquakes)", "show_shadows_3d"))
 	p.add_child(SettingControls.section("Day and night"))
 	p.add_child(SettingControls.check("Show night", "show_night"))
 	p.add_child(SettingControls.option("Night darkness", "night_darkness", [
 		["Very light", "VeryLight"], ["Light", "Light"], ["Dark", "Dark"], ["Very dark", "VeryDark"]]))
 	p.add_child(SettingControls.check("Show moon light on the night side (3D)", "show_moon_light"))
-	p.add_child(SettingControls.check("Show star field behind the globe (3D)", "show_stars"))
 	p.add_child(SettingControls.check("Attract mode (globe spins continuously)", "attract_mode"))
 	p.add_child(SettingControls.section("Sounds"))
 	p.add_child(SettingControls.check("Enable sounds", "enable_sounds"))
 
 func _map(tabs: TabContainer) -> void:
 	var picker: Control = load("res://scripts/ui/map_picker.gd").new()
-	picker.name = "Map"
-	tabs.add_child(picker)
+	picker.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var box := VBoxContainer.new()
+	box.name = "Map"
+	box.add_child(picker)
+	var sats := Button.new()
+	sats.text = "Satellites…"
+	sats.tooltip_text = "Show or hide satellites and choose which are tracked."
+	sats.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	sats.pressed.connect(func() -> void: open_satellites.emit())
+	box.add_child(sats)
+	tabs.add_child(box)
 
 func _cities(tabs: TabContainer) -> void:
 	var p := SettingControls.page(tabs, "Cities")

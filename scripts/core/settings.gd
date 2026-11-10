@@ -47,7 +47,7 @@ const DEFAULTS := {
 	"show_noon_meridians": true,
 	"show_minor_grid": true,
 	"show_moon_light": true,
-	"show_stars": false,
+	"show_stars": true,
 	"attract_mode": false,
 	"world_locked": false,
 	"enable_earthquakes": true,
@@ -68,10 +68,15 @@ const DEFAULTS := {
 	"home_name": "Greenwich",
 	"mouse_tracking": true,
 	"show_debug_grid": false,
+	"show_intro": true,
+	"show_fps": true,
+	"show_satellites": false,
+	"tracked_satellites": "25544,48274,20580,27386,25994,27424,28931,39766,16908,29228",
 	"show_shadows": true,
+	"show_shadows_3d": true,
 	"show_regions": true,
 	"label_font": "",
-	"color_grid": "#00061a",
+	"color_grid": "#808080",
 	"color_hours": "#b5381a",
 	"color_hours_2d": "#f4a460",
 	"color_background": "#000000",
@@ -86,6 +91,7 @@ const DEFAULTS := {
 }
 
 var _values: Dictionary = {}
+var _overrides: Dictionary = {}   # this run only (command-line development flags); never saved
 
 func _ready() -> void:
 	_values = DEFAULTS.duplicate()
@@ -96,6 +102,8 @@ func _ready() -> void:
 				_values[key] = cfg.get_value(SECTION, key)
 
 func get_value(key: String) -> Variant:
+	if _overrides.has(key):
+		return _overrides[key]
 	return _values.get(key, DEFAULTS.get(key))
 
 func get_bool(key: String) -> bool:
@@ -111,7 +119,9 @@ func get_string(key: String) -> String:
 	return str(get_value(key))
 
 func set_value(key: String, value: Variant) -> void:
-	if _values.get(key) == value:
+	var had_override := _overrides.has(key)
+	_overrides.erase(key)   # a real change replaces any command-line override
+	if _values.get(key) == value and not had_override:
 		return
 	_values[key] = value
 	changed.emit(key, value)
@@ -119,7 +129,7 @@ func set_value(key: String, value: Variant) -> void:
 
 ## Set a value for this run only (used by command-line development options).
 func override(key: String, value: Variant) -> void:
-	_values[key] = value
+	_overrides[key] = value
 
 func reset_all() -> void:
 	for key in DEFAULTS.keys():

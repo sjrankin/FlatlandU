@@ -51,19 +51,62 @@ static func city_color(city: Dictionary) -> Color:
 		"SouthAmerica": return Settings.get_color("color_city_south_america")
 	return Color.WHITE
 
-## Font used for labels; empty setting means the default UI font.
+## Noto Sans (SIL Open Font License, see Assets/Fonts/NotoSans-OFL.txt) is bundled with the app and is the
+## fallback for 3D text wherever the preferred system font is missing. Regular, bold or black by weight.
+static func noto(weight: int = 800) -> Font:
+	var file := "NotoSans-Regular"
+	if weight >= 850:
+		file = "NotoSans-Black"
+	elif weight >= 600:
+		file = "NotoSans-Bold"
+	return load("res://Assets/Fonts/" + file + ".ttf") as Font
+
+static var _installed_fonts: PackedStringArray = []
+
+static func _installed(font_name: String) -> bool:
+	if _installed_fonts.is_empty():
+		_installed_fonts = OS.get_system_fonts()
+	return _installed_fonts.has(font_name)
+
+## A system font if one of `names` is installed (with Noto Sans as the glyph fallback); otherwise Noto Sans.
+## On iOS Noto Sans is always used: the system fonts there produced broken letters in 3D text.
+static func _system_or_noto(names: PackedStringArray, weight: int) -> Font:
+	if OS.get_name() != "iOS":
+		for n in names:
+			if _installed(n):
+				var f := SystemFont.new()
+				f.font_names = PackedStringArray([n])
+				f.font_weight = weight
+				f.fallbacks = [noto(weight)]
+				return f
+	return noto(weight)
+
+## A 2D (flat text) font: the first installed font in `names`, or Noto Sans if none of them is installed.
+## Unlike the 3D text fonts, system fonts are used on iOS too.
+static func ui_font(names: PackedStringArray, weight: int) -> Font:
+	var wanted: Array = []
+	for n in names:
+		wanted.append(n.to_lower())
+	for installed in OS.get_system_fonts():
+		if wanted.has(installed.to_lower()):
+			var f := SystemFont.new()
+			f.font_names = names
+			f.font_weight = weight
+			return f
+	return noto(weight)
+
+## Font used for labels; empty setting means the default (Avenir, Helvetica Neue or Arial, else Noto Sans).
 static func label_font(weight: int = 800) -> Font:
 	var n := Settings.get_string("label_font")
 	if n == "":
 		n = "Avenir"
-	var f := SystemFont.new()
-	f.font_names = PackedStringArray([n, "Helvetica Neue", "Arial"])
-	f.font_weight = weight
-	return f
+	return _system_or_noto(PackedStringArray([n, "Helvetica Neue", "Arial"]), weight)
+
+## Heavy face for the welcome text and earthquake magnitudes. A genuinely heavy face is used because
+## synthetic emboldening makes glyph outlines self-intersect, which breaks letters in 3D text meshes.
+static func heavy_font() -> Font:
+	return _system_or_noto(PackedStringArray(["Arial Black"]), 900)
 
 ## Heavier face for earthquake magnitudes (Flatland uses Avenir-Black).
 static func quake_font() -> Font:
-	var v := FontVariation.new()
-	v.base_font = label_font(900)
-	v.variation_embolden = 0.4
-	return v
+	return heavy_font()

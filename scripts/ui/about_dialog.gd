@@ -2,10 +2,13 @@ extends Window
 ## Flatland's About view: a slowly turning globe, the title, version and credits.
 
 var _earth: Node3D
+var _licenses: TextEdit
+var _globe_box: SubViewportContainer
+var _licenses_button: Button
 
 func _ready() -> void:
 	title = "About Flatland"
-	size = Vector2i(620, 640)
+	size = Vector2i(620, 720)
 	exclusive = false
 	transient = true
 	close_requested.connect(hide)
@@ -19,13 +22,14 @@ func _ready() -> void:
 	add_child(vb)
 	var svc := SubViewportContainer.new()
 	svc.stretch = true
-	svc.custom_minimum_size = Vector2(600, 340)
+	svc.custom_minimum_size = Vector2(600, 280)
 	svc.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var vp := SubViewport.new()
 	vp.own_world_3d = true
 	vp.msaa_3d = Viewport.MSAA_4X
 	svc.add_child(vp)
 	vb.add_child(svc)
+	_globe_box = svc
 	_build_globe(vp)
 	var name_l := Label.new()
 	name_l.text = "Flatland"
@@ -37,14 +41,40 @@ func _ready() -> void:
 	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	info.text = "Version %s\nGodot port of FlatlandView\n\nFlatland was written by Stuart Rankin with design inspiration\nand assistance from Kees de Kok.\n© 2019 – 2026 Stuart Rankin\n\nAll images and sounds used in Flatland are, to the best of the\nauthor's knowledge, in the public domain." % ProjectSettings.get_setting("application/config/version", "1.0")
 	vb.add_child(info)
+	var credit := Label.new()
+	credit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	credit.add_theme_font_size_override("font_size", 12)
+	credit.text = "3D text uses Noto Sans, licensed under the SIL Open Font License 1.1."
+	vb.add_child(credit)
+	_licenses = TextEdit.new()
+	_licenses.editable = false
+	_licenses.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	_licenses.custom_minimum_size = Vector2(600, 190)
+	_licenses.visible = false
+	_licenses.text = "Noto Sans\n\n" + FileAccess.get_file_as_string("res://Assets/Fonts/NotoSans-OFL.txt")
+	vb.add_child(_licenses)
+	var buttons := HBoxContainer.new()
+	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
+	buttons.add_theme_constant_override("separation", 12)
+	vb.add_child(buttons)
+	_licenses_button = Button.new()
+	_licenses_button.text = "Show Licenses"
+	_licenses_button.pressed.connect(_toggle_licenses)
+	buttons.add_child(_licenses_button)
 	var close := Button.new()
 	close.text = "Close"
-	close.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	close.pressed.connect(hide)
-	vb.add_child(close)
+	buttons.add_child(close)
 	Settings.changed.connect(func(k: String, _v: Variant) -> void:
 		if k == "map_type": _apply_map())
 	MapCatalog.texture_ready.connect(func(_f: String, _t: Texture2D) -> void: _apply_map())
+
+## Show or hide the full license text. The globe makes room for it, so the window keeps its size.
+func _toggle_licenses() -> void:
+	_licenses.visible = not _licenses.visible
+	_globe_box.visible = not _licenses.visible
+	_licenses.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_licenses_button.text = "Hide Licenses" if _licenses.visible else "Show Licenses"
 
 var _mat: StandardMaterial3D
 
