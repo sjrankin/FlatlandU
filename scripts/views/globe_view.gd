@@ -1,0 +1,1292 @@
+extends Node3D
+## The 3D globe (counterpart of Flatland's GlobeView + extensions).
+## The sun is fixed in the scene and the Earth turns beneath it according to UTC, exactly as
+## Flatland does. The globe is lit by a sun light and, optionally, a cyan moon light.
+
+signal hover_changed(lat: float, lon: float, over_globe: bool)
+signal location_clicked(lat: float, lon: float)
+
+const R := Geo.GLOBE_RADIUS
+# Camera as in FlatlandView: a perspective camera 175 units away with a roughly 9 to 10 degree field of view
+# (nearly orthographic), zoom limited to 60 (Defaults.ClosestZ) at the near end.
+const DEFAULT_DISTANCE := 175.0
+const MIN_DISTANCE := 60.0
+const MAX_DISTANCE := 500.0
+const CAMERA_FOV := 9.0
+
+var _system: Node3D                # tilted by the sun's declination
+var _earth: Node3D                  # rotates with the Earth (map, grid, cities, quakes)
+var _earth_mesh: MeshInstance3D
+var _earth_mat: ShaderMaterial
+var _sea_mesh: MeshInstance3D
+var _sea_mat: ShaderMaterial
+var _sea_file := ""
+var _fixed: Node3D                  # stays with the sun (poles, noon meridians, solar hours)
+var _orbit: Node3D                  # camera pivot
+var _camera: Camera3D
+var _sun: DirectionalLight3D
+var _moon: DirectionalLight3D
+var _env: Environment
+var _cities_node: Node3D
+var _quakes_node: Node3D
+var _hours_earth: Node3D
+var _hours_fixed: Node3D
+var _grid_node: Node3D
+var _noon_line: MeshInstance3D
+var _sites_node: Node3D
+var _regions_node: Node3D
+var _cube: Node3D
+var _cubic := false
+var _poles: Node3D
+var _pole_shafts: Array = []        # [north, south] striped shafts that spin like barber poles
+var _dn_items: Array = []           # nodes whose material follows day/night: {node, lat, lon, day, night}
+var _arrows: Array = []             # animated earthquake arrows (spin about their axis)
+var _mat_cache: Dictionary = {}
+var _pois_node: Node3D
+var _current_map_file := ""
+var _yaw := 0.0
+var _pan := Vector2.ZERO            # screen-plane offset of the camera (command/option-drag)
+var _pitch := 0.0
+var _distance := DEFAULT_DISTANCE
+var _dragging := false
+var _last_hour_stamp := -1
+var _tick := 0.0
+var _attract_angle := 0.0
+var _earth_angle := 0.0
+var _mouse_pos := Vector2.ZERO
+var _mouse_inside := false
+var _vp_size := Vector2(1280, 800)
+
+func _ready() -> void:
+	_build_scene()
+	Settings.changed.connect(_on_setting_changed)
+	MapCatalog.texture_ready.connect(_on_texture_ready)
+	QuakeService.quakes_updated.connect(func(_q: Array) -> void: _rebuild_quakes())
+	CityDB.user_data_changed.connect(func() -> void:
+		_rebuild_pois()
+		_rebuild_regions()
+		_rebuild_quakes())
+	_apply_map()
+	_rebuild_all()
+	_update_time(true)
+
+# MARK: - Scene construction
+
+func _build_scene() -> void:
+	_env = Environment.new()
+	_env.background_mode = Environment.BG_COLOR
+	_env.background_color = Settings.get_color("color_background")
+	_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	_env.ambient_light_color = Color(0.5, 0.55, 0.7)
+	_env.ambient_light_energy = 0.05
+	# A soft studio-like sky provides the reflections that make metal (the gold balls) look metallic.
+	var refl_sky := ProceduralSkyMaterial.new()
+	refl_sky.sky_top_color = Color("#9fb8d8")
+	refl_sky.sky_horizon_color = Color("#fff1d0")
+	refl_sky.ground_horizon_color = Color("#fff1d0")
+	refl_sky.ground_bottom_color = Color("#d9c9a0")
+	refl_sky.sky_energy_multiplier = 1.6
+	refl_sky.ground_horizon_color = Color("#fff6dc")
+	var refl := Sky.new()
+	refl.sky_material = refl_sky
+	_env.sky = refl
+	_env.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	var we := WorldEnvironment.new()
+	we.environment = _env
+	add_child(we)
+
+	# The whole Earth system is tilted by the sun's declination, as in Flatland, so the sun stays
+	# directly behind the viewer and the seasons show: the axis leans toward the sun in summer.
+	_system = Node3D.new()
+	_system.name = "System"
+	add_child(_system)
+
+	_fixed = Node3D.new()
+	_fixed.name = "Fixed"
+	_system.add_child(_fixed)
+
+	_earth = Node3D.new()
+	_earth.name = "Earth"
+	_system.add_child(_earth)
+
+	var shader: Shader = load("res://shaders/earth.gdshader")
+	_earth_mat = ShaderMaterial.new()
+	_earth_mat.shader = shader
+	_earth_mat.set_shader_parameter("albedo_color", Color(0.12, 0.2, 0.35))
+	_earth_mesh = MeshInstance3D.new()
+	_earth_mesh.name = "Sphere"
+	_earth_mesh.mesh = _make_sphere_mesh(R, 160, 80)
+	_earth_mesh.material_override = _earth_mat
+	_earth_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_earth.add_child(_earth_mesh)
+
+	# Invisible, slightly smaller sphere that casts the Earth's shadow, so objects on the night side
+	# are not lit by the sun from the side.
+	var caster := MeshInstance3D.new()
+	caster.mesh = _make_sphere_mesh(R - 0.3, 64, 32)
+	caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	_earth.add_child(caster)
+
+	# Maps with transparent seas (Standard, etc.) sit on top of a sea sphere, as in Flatland.
+	_sea_mat = ShaderMaterial.new()
+	_sea_mat.shader = shader
+	_sea_mat.set_shader_parameter("albedo_color", Color("#9cc3dd"))
+	_sea_mesh = MeshInstance3D.new()
+	_sea_mesh.name = "Sea"
+	_sea_mesh.mesh = _make_sphere_mesh(R - 0.02, 128, 64)
+	_sea_mesh.material_override = _sea_mat
+	_sea_mesh.visible = false
+	_sea_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_earth.add_child(_sea_mesh)
+
+	_cities_node = _child(_earth, "Cities")
+	_quakes_node = _child(_earth, "Earthquakes")
+	_hours_earth = _child(_earth, "HoursEarth")
+	_grid_node = _child(_earth, "Grid")
+	_sites_node = _child(_earth, "HeritageSites")
+	_pois_node = _child(_earth, "POIs")
+	_regions_node = _child(_earth, "Regions")
+	_hours_fixed = _child(_fixed, "HoursFixed")
+
+	_noon_line = MeshInstance3D.new()
+	_fixed.add_child(_noon_line)
+
+	_build_poles()
+	_build_cube()
+
+	_sun = DirectionalLight3D.new()
+	_sun.light_energy = 1.6
+	_sun.light_color = Color.WHITE
+	_sun.shadow_enabled = true
+	_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	_sun.directional_shadow_max_distance = 215.0
+	_sun.shadow_bias = 0.03
+	_sun.shadow_normal_bias = 0.5
+	_sun.shadow_opacity = 0.75
+	add_child(_sun)
+
+	_moon = DirectionalLight3D.new()
+	_moon.light_energy = 0.1
+	_moon.light_color = Color.CYAN
+	add_child(_moon)
+
+	_orbit = Node3D.new()
+	_orbit.name = "Orbit"
+	add_child(_orbit)
+	_camera = Camera3D.new()
+	_camera.fov = CAMERA_FOV
+	_camera.near = 135.0
+	_camera.far = 215.0
+	_camera.position = Vector3(0, 0, _distance)
+	_orbit.add_child(_camera)
+	_camera.current = true
+
+func _child(parent: Node, node_name: String) -> Node3D:
+	var n := Node3D.new()
+	n.name = node_name
+	parent.add_child(n)
+	return n
+
+## UV sphere with longitude 0 facing +Z and the texture's left edge at -180°.
+func _make_sphere_mesh(radius: float, segments: int, rings: int) -> ArrayMesh:
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var uvs := PackedVector2Array()
+	var idx := PackedInt32Array()
+	for y in range(rings + 1):
+		var lat := 90.0 - 180.0 * float(y) / float(rings)
+		for x in range(segments + 1):
+			var lon := -180.0 + 360.0 * float(x) / float(segments)
+			var n := Geo.to_vec3(lat, lon, 1.0)
+			verts.append(n * radius)
+			norms.append(n)
+			uvs.append(Vector2(float(x) / float(segments), float(y) / float(rings)))
+	for y in range(rings):
+		for x in range(segments):
+			var a := y * (segments + 1) + x
+			var b := a + segments + 1
+			idx.append_array([a, a + 1, b, a + 1, b + 1, b])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_TEX_UV] = uvs
+	arrays[Mesh.ARRAY_INDEX] = idx
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+## The candy-striped pole with a gold ball at each end (Flatland's PolarShape). Each half-pole spins
+## slowly about its axis so the diagonal stripes climb like a barber pole.
+func _build_poles() -> void:
+	var img := Image.create(64, 64, false, Image.FORMAT_RGB8)
+	for y in range(64):
+		for x in range(64):
+			var stripe := int(floor((x + y) / 16.0)) % 2 == 0
+			img.set_pixel(x, y, Color("#d42a2a") if stripe else Color.WHITE)
+	var tex := ImageTexture.create_from_image(img)
+	var shaft_mat := StandardMaterial3D.new()
+	shaft_mat.albedo_texture = tex
+	shaft_mat.uv1_scale = Vector3(1, 8.7, 1)   # stripes at about 45 degrees
+	shaft_mat.texture_repeat = true
+	shaft_mat.roughness = 0.5
+	var gold := StandardMaterial3D.new()
+	gold.albedo_color = Color("#ffcf40")
+	gold.metallic = 1.0
+	gold.metallic_specular = 1.0
+	gold.roughness = 0.2
+	gold.emission_enabled = true
+	gold.emission = Color("#4a3400")
+	_poles = Node3D.new()
+	_poles.name = "Poles"
+	_fixed.add_child(_poles)
+	for sign_v in [1.0, -1.0]:
+		var shaft := MeshInstance3D.new()
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.22
+		cyl.bottom_radius = 0.22
+		cyl.height = 12.0
+		shaft.mesh = cyl
+		shaft.material_override = shaft_mat
+		shaft.position = Vector3(0, 6.0 * sign_v, 0)
+		_poles.add_child(shaft)
+		_pole_shafts.append(shaft)
+		var ball := MeshInstance3D.new()
+		var sph := SphereMesh.new()
+		sph.radius = 0.55
+		sph.height = 1.1
+		ball.mesh = sph
+		ball.material_override = gold
+		ball.position = Vector3(0, 12.0 * sign_v, 0)
+		_poles.add_child(ball)
+
+# MARK: - Settings and map handling
+
+func _on_setting_changed(key: String, _value: Variant) -> void:
+	match key:
+		"map_type":
+			_apply_map()
+		"show_cities", "city_filter", "city_rank", "show_city_names", "city_shape", "city_scale":
+			_rebuild_cities()
+		"show_grid", "show_equator", "show_polar_circles", "show_tropics", \
+		"show_noon_meridians", "show_minor_grid":
+			_rebuild_grid()
+		"hour_type", "home_latitude", "home_longitude":
+			_last_hour_stamp = -1
+			_rebuild_hours()
+		"show_moon_light":
+			_moon.visible = Settings.get_bool("show_moon_light")
+			_update_time(false)
+		"show_stars":
+			_apply_stars()
+		"enable_earthquakes", "quake_min_magnitude", "quake_max_age_days", "quake_shape", "quake_scale", \
+		"quake_indicator", "quake_highlight_new", "quake_recent_hours":
+			_rebuild_quakes()
+		"show_heritage_sites":
+			_rebuild_sites()
+		"show_user_pois":
+			_rebuild_pois()
+		"show_regions":
+			_rebuild_regions()
+		"view_type":
+			set_cubic(Settings.get_string("view_type") == Settings.VIEW_CUBIC)
+		"color_grid":
+			_rebuild_grid()
+			_rebuild_regions()
+		"color_hours":
+			_rebuild_hours()
+		"label_font", "color_city_capital", "color_city_africa", "color_city_asia", "color_city_europe", \
+		"color_city_north_america", "color_city_south_america":
+			_rebuild_cities()
+			_rebuild_hours()
+		"color_background":
+			_apply_stars()
+		"debug_time_tick":
+			_update_time(true)
+		"world_locked":
+			if Settings.get_bool("world_locked"):
+				reset_view()
+
+func _apply_map() -> void:
+	var m := MapCatalog.map_for(Settings.get_string("map_type"))
+	if m.is_empty():
+		return
+	_current_map_file = str(m["globe"])
+	_sea_file = str(m.get("sea", ""))
+	_sea_mesh.visible = _sea_file != ""
+	if _sea_file != "":
+		var sea_tex := MapCatalog.request(_sea_file)
+		if sea_tex != null:
+			_set_tex(_sea_mat, sea_tex)
+	var tex := MapCatalog.request(_current_map_file)
+	if tex != null:
+		_set_earth_texture(tex)
+
+func _on_texture_ready(file_name: String, tex: Texture2D) -> void:
+	if file_name == _current_map_file:
+		_set_earth_texture(tex)
+	if file_name == _sea_file and _sea_file != "":
+		_set_tex(_sea_mat, tex)
+	elif file_name == "TychoSky.png":
+		_apply_stars()
+
+func _set_earth_texture(tex: Texture2D) -> void:
+	_set_tex(_earth_mat, tex)
+	_earth_mat.set_shader_parameter("albedo_color", Color.WHITE)
+
+func _set_tex(mat: ShaderMaterial, tex: Texture2D) -> void:
+	mat.set_shader_parameter("albedo_tex", tex)
+	mat.set_shader_parameter("use_tex", true)
+
+func _apply_stars() -> void:
+	if Settings.get_bool("show_stars"):
+		var tex := MapCatalog.request("TychoSky.png")
+		if tex != null:
+			var sky_mat := PanoramaSkyMaterial.new()
+			sky_mat.panorama = tex
+			var sky := Sky.new()
+			sky.sky_material = sky_mat
+			_env.sky = sky
+			_env.background_mode = Environment.BG_SKY
+	else:
+		_env.background_mode = Environment.BG_COLOR
+		_env.background_color = Settings.get_color("color_background")
+
+# MARK: - Content (cities, grid, hours, quakes)
+
+func _rebuild_all() -> void:
+	set_cubic(Settings.get_string("view_type") == Settings.VIEW_CUBIC)
+	_rebuild_grid()
+	_rebuild_cities()
+	_rebuild_hours()
+	_rebuild_quakes()
+	_rebuild_sites()
+	_rebuild_pois()
+	_rebuild_regions()
+	_moon.visible = Settings.get_bool("show_moon_light")
+	_apply_stars()
+
+func _clear(node: Node) -> void:
+	for c in node.get_children():
+		c.queue_free()
+
+## Material pair (day, night) for a color. At night the object glows in its own color, as in Flatland.
+func _mat_pair(color: Color, glow: Color) -> Array:
+	var key := "%s|%s" % [color.to_html(), glow.to_html()]
+	if _mat_cache.has(key):
+		return _mat_cache[key]
+	var day := StandardMaterial3D.new()
+	day.albedo_color = color
+	day.roughness = 0.4
+	day.metallic_specular = 0.6
+	var night := day.duplicate() as StandardMaterial3D
+	night.emission_enabled = true
+	night.emission = glow
+	night.emission_energy_multiplier = 0.4
+	_mat_cache[key] = [day, night]
+	return _mat_cache[key]
+
+func _register_dn(node: MeshInstance3D, lat: float, lon: float, color: Color, glow: Color) -> void:
+	var pair := _mat_pair(color, glow)
+	_dn_items.append({"node": node, "lat": lat, "lon": lon, "day": pair[0], "night": pair[1]})
+	node.material_override = pair[0] if Solar.is_daylight(lat, lon, Solar.now()) else pair[1]
+
+func _refresh_day_night() -> void:
+	var now := Solar.now()
+	for it in _dn_items:
+		if is_instance_valid(it["node"]):
+			it["node"].material_override = it["day"] if Solar.is_daylight(it["lat"], it["lon"], now) else it["night"]
+
+## Extruded text lying on the surface, readable from outside, centered on its position.
+func _flat_text(text: String, lat: float, lon: float, radius: float, em: float, depth: float, top_anchor: bool = false, font: Font = null) -> MeshInstance3D:
+	var tm := TextMesh.new()
+	tm.text = text
+	tm.font = font if font != null else Geo.label_font()
+	tm.font_size = 64
+	tm.pixel_size = em / 64.0
+	tm.depth = depth
+	tm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var mi := MeshInstance3D.new()
+	mi.mesh = Shapes.bend_text(tm, radius)
+	var basis := Geo.surface_basis(lat, lon)
+	var pos := Geo.to_vec3(lat, lon, radius)
+	if top_anchor:
+		pos -= basis.y * (em * 0.5)    # text hangs from its anchor, like Flatland's top-center pivot
+	mi.transform = Transform3D(basis, pos)
+	return mi
+
+## Node whose local +Y points away from the globe at the given place (so shapes can be built "upright").
+func _up_node(lat: float, lon: float, radius: float) -> Node3D:
+	var b := Geo.surface_basis(lat, lon)
+	var n := Node3D.new()
+	n.transform = Transform3D(Basis(b.x, b.z, b.x.cross(b.z)), Geo.to_vec3(lat, lon, radius))
+	return n
+
+func _city_population(c: Dictionary) -> int:
+	return maxi(int(c.get("Population", 0)), int(c.get("MetropolitanPopulation", 0)))
+
+## Cities in the shape chosen in Preferences (Flatland's CityDisplayTypes). Every shape glows in its own
+## color at night; names lie flat on the map, dark blue by day and teal by night.
+func _rebuild_cities() -> void:
+	_clear(_cities_node)
+	_dn_items = _dn_items.filter(func(i): return not (is_instance_valid(i["node"]) and i["node"].get_parent() == _cities_node))
+	if not Settings.get_bool("show_cities"):
+		return
+	var shape := Settings.get_string("city_shape")
+	var mult := Shapes.scale_for("city_scale")
+	var names := Settings.get_bool("show_city_names")
+	var list := CityDB.filtered_cities()
+	var max_pop := 1
+	var min_pop := 1 << 40
+	for c in list:
+		var p := _city_population(c)
+		max_pop = maxi(max_pop, p)
+		if p > 0:
+			min_pop = mini(min_pop, p)
+	for c in list:
+		var lat: float = c["Latitude"]
+		var lon: float = c["Longitude"]
+		var col := Geo.city_color(c)
+		var pop := _city_population(c)
+		var rel := float(pop if pop > 0 else min_pop) / float(max_pop)
+		if shape == "Names":
+			var nt := _flat_text(" " + str(c["Name"]), lat, lon, R + 0.9, 0.7, 0.07)
+			_cities_node.add_child(nt)
+			_register_dn(nt, lat, lon, col, col)
+			_city_stick(c, col, 0.8, mult)
+			continue
+		if names:
+			var t := _flat_text(str(c["Name"]), lat, lon, R + 0.11, 0.7, 0.07)
+			_cities_node.add_child(t)
+			_register_dn(t, lat, lon, Color("#003153"), Color("#30b0c7"))
+		match shape:
+			"Uniform Flush Spheres":
+				_city_flush_sphere(c, col, maxf(0.15, 0.15))
+			"Relative Flush Spheres":
+				_city_flush_sphere(c, col, maxf(0.15, rel * 0.35))
+			"Floating Spheres":
+				_city_floating(c, col, rel, true, mult)
+			"Floating Boxes":
+				_city_floating(c, col, rel, false, mult)
+			"Boxes":
+				_city_block(c, col, rel, true, mult)
+			"Cylinders":
+				_city_block(c, col, rel, false, mult)
+			"Pyramids":
+				_city_pyramid(c, col, rel, mult)
+			"Sticks":
+				_city_stick(c, col, 0.5, mult)
+			_:
+				_city_flush_sphere(c, col, 0.15)
+
+func _city_flush_sphere(c: Dictionary, col: Color, size: float) -> void:
+	var sphere := SphereMesh.new()
+	sphere.radius = size
+	sphere.height = size * 2.0
+	sphere.radial_segments = 16
+	sphere.rings = 8
+	var mi := MeshInstance3D.new()
+	mi.mesh = sphere
+	mi.position = Geo.to_vec3(c["Latitude"], c["Longitude"], R - size * 0.5 + 0.05)
+	_cities_node.add_child(mi)
+	_register_dn(mi, c["Latitude"], c["Longitude"], col, col)
+
+## Sphere or box on a stem whose color is the complement of the city color (Flatland's floating cities).
+func _city_floating(c: Dictionary, col: Color, rel: float, is_sphere: bool, mult: float) -> void:
+	var lat: float = c["Latitude"]
+	var lon: float = c["Longitude"]
+	var size := maxf(0.5 * rel, 0.15)
+	var stem_len := maxf(2.0 * rel, 0.1)
+	var holder := _up_node(lat, lon, R + 0.1)
+	holder.scale = Vector3.ONE * mult
+	_cities_node.add_child(holder)
+	var stem := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.04
+	cyl.bottom_radius = 0.04
+	cyl.height = stem_len
+	stem.mesh = cyl
+	stem.material_override = Shapes.plain(Shapes.complement(col))
+	holder.add_child(stem)
+	var body := MeshInstance3D.new()
+	if is_sphere:
+		var sph := SphereMesh.new()
+		sph.radius = size
+		sph.height = size * 2.0
+		body.mesh = sph
+		holder.add_child(body)
+		_register_dn(body, lat, lon, col, col)
+	else:
+		var box := BoxMesh.new()
+		box.size = Vector3.ONE * size * 2.0
+		body.mesh = box
+		holder.add_child(body)
+		_register_outline(body, lat, lon, col)
+	body.position = Vector3(0, stem_len - size, 0)
+
+## Tall boxes or cylinders whose height follows the population (Flatland's "Boxes" and "Cylinders").
+func _city_block(c: Dictionary, col: Color, rel: float, is_box: bool, mult: float) -> void:
+	var lat: float = c["Latitude"]
+	var lon: float = c["Longitude"]
+	var size := maxf(rel * 2.0, 0.33)
+	var hdim := maxf(size * 0.1, 0.25)
+	var holder := _up_node(lat, lon, R + size * 0.5 * mult)
+	holder.scale = Vector3.ONE * mult
+	_cities_node.add_child(holder)
+	var mi := MeshInstance3D.new()
+	if is_box:
+		var box := BoxMesh.new()
+		box.size = Vector3(hdim, size, hdim)
+		mi.mesh = box
+		holder.add_child(mi)
+		_register_outline(mi, lat, lon, col)
+	else:
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = hdim * 0.5
+		cyl.bottom_radius = hdim * 0.5
+		cyl.height = size
+		mi.mesh = cyl
+		holder.add_child(mi)
+		_register_dn(mi, lat, lon, col, col)
+
+func _city_pyramid(c: Dictionary, col: Color, rel: float, mult: float) -> void:
+	var lat: float = c["Latitude"]
+	var lon: float = c["Longitude"]
+	var size := maxf(rel * 2.0, 0.33)
+	var hdim := maxf(size * 0.1, 0.25)
+	var holder := _up_node(lat, lon, R)
+	holder.scale = Vector3.ONE * mult
+	_cities_node.add_child(holder)
+	var mi := MeshInstance3D.new()
+	mi.mesh = Shapes.pyramid_mesh(hdim, size, hdim)
+	holder.add_child(mi)
+	_register_dn(mi, lat, lon, col, col)
+
+func _city_stick(c: Dictionary, col: Color, height: float, mult: float) -> void:
+	var holder := _up_node(c["Latitude"], c["Longitude"], R + 0.1)
+	holder.scale = Vector3.ONE * mult
+	_cities_node.add_child(holder)
+	var mi := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.04
+	cyl.bottom_radius = 0.04
+	cyl.height = height
+	mi.mesh = cyl
+	mi.material_override = Shapes.plain(Shapes.complement(col))
+	holder.add_child(mi)
+
+## Textured (outlined block) material that also glows at night.
+func _register_outline(node: MeshInstance3D, lat: float, lon: float, col: Color) -> void:
+	_dn_items.append({"node": node, "lat": lat, "lon": lon, "day": Shapes.outline_material(col, false), "night": Shapes.outline_material(col, true)})
+	node.material_override = Shapes.outline_material(col, not Solar.is_daylight(lat, lon, Solar.now()))
+
+func _rebuild_sites() -> void:
+	_clear(_sites_node)
+	if not Settings.get_bool("show_heritage_sites"):
+		return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	var s := SphereMesh.new()
+	s.radius = 0.07
+	s.height = 0.14
+	s.radial_segments = 6
+	s.rings = 3
+	mm.mesh = s
+	mm.instance_count = CityDB.heritage_sites.size()
+	for i in range(CityDB.heritage_sites.size()):
+		var h: Dictionary = CityDB.heritage_sites[i]
+		mm.set_instance_transform(i, Transform3D(Basis.IDENTITY, Geo.to_vec3(h["Latitude"], h["Longitude"], R + 0.05)))
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color("#f6f6c8")
+	mat.emission_enabled = true
+	mat.emission = Color("#8a8a50")
+	mmi.material_override = mat
+	_sites_node.add_child(mmi)
+
+## Locations of interest are small cones pointing into the surface (Flatland's PlotLocationAsCone).
+func _rebuild_pois() -> void:
+	_clear(_pois_node)
+	_dn_items = _dn_items.filter(func(i): return not (is_instance_valid(i["node"]) and i["node"].get_parent() == _pois_node))
+	if not Settings.get_bool("show_user_pois"):
+		return
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.15
+	cone.bottom_radius = 0.0
+	cone.height = 0.45
+	for p in CityDB.all_pois():
+		var mi := MeshInstance3D.new()
+		mi.mesh = cone
+		var b := Geo.surface_basis(p["Latitude"], p["Longitude"])
+		mi.transform = Transform3D(Basis(b.x, b.z, b.x.cross(b.z)), Geo.to_vec3(p["Latitude"], p["Longitude"], R + 0.05))
+		_pois_node.add_child(mi)
+		var col := Color(str(p.get("Color", "#ee44cc")))
+		_register_dn(mi, p["Latitude"], p["Longitude"], col, col)
+
+func _rebuild_regions() -> void:
+	_clear(_regions_node)
+	if not Settings.get_bool("show_regions"):
+		return
+	for r in CityDB.regions:
+		if not r.get("enabled", true):
+			continue
+		var lat1 := float(r["lat1"])
+		var lat2 := float(r["lat2"])
+		var lon1 := float(r["lon1"])
+		var lon2 := float(r["lon2"])
+		if lon2 < lon1:
+			lon2 += 360.0
+		var pts: Array = []
+		var rr := R + 0.03
+		for i in range(33):
+			pts.append(Geo.to_vec3(lat1, lon1 + (lon2 - lon1) * i / 32.0, rr))
+		for i in range(33):
+			pts.append(Geo.to_vec3(lat1 + (lat2 - lat1) * i / 32.0, lon2, rr))
+		for i in range(33):
+			pts.append(Geo.to_vec3(lat2, lon2 - (lon2 - lon1) * i / 32.0, rr))
+		for i in range(33):
+			pts.append(Geo.to_vec3(lat2 + (lat1 - lat2) * i / 32.0, lon1, rr))
+		_regions_node.add_child(_line_mesh([pts], Color(str(r.get("color", "#ffcc00")))))
+
+## The cubic world: Flatland's silly cube textured with six map faces. SceneKit's box material
+## order (front, right, back, left, top, bottom) gets nx, pz, px, nz, py-90, ny90.
+func _build_cube() -> void:
+	_cube = Node3D.new()
+	_cube.name = "Cube"
+	_cube.visible = false
+	_earth.add_child(_cube)
+	var faces := [
+		["nx", Vector3(0, 0, 5), Vector3(0, 0, 0)],
+		["pz", Vector3(5, 0, 0), Vector3(0, 90, 0)],
+		["px", Vector3(0, 0, -5), Vector3(0, 180, 0)],
+		["nz", Vector3(-5, 0, 0), Vector3(0, -90, 0)],
+		["py-90", Vector3(0, 5, 0), Vector3(-90, 0, 0)],
+		["ny90", Vector3(0, -5, 0), Vector3(90, 0, 0)],
+	]
+	for f in faces:
+		var quad := MeshInstance3D.new()
+		var qm := QuadMesh.new()
+		qm.size = Vector2(10, 10)
+		quad.mesh = qm
+		var mat := StandardMaterial3D.new()
+		mat.albedo_texture = load("res://Assets/Cubic/%s.png" % f[0])
+		mat.roughness = 0.8
+		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+		quad.material_override = mat
+		quad.position = f[1]
+		quad.rotation_degrees = f[2]
+		_cube.add_child(quad)
+
+func set_cubic(on: bool) -> void:
+	_cubic = on
+	_cube.visible = on
+	_noon_line.visible = not on
+	for n in [_earth_mesh, _sea_mesh, _cities_node, _quakes_node, _grid_node, _sites_node, _pois_node, _regions_node]:
+		n.visible = not on
+	if not on:
+		_sea_mesh.visible = _sea_file != ""
+
+## Grid lines drawn as flat ribbons lying on the globe, so they have a real width (GPU lines are 1 px).
+func _line_mesh(points_list: Array, color: Color, dashed: bool = false, width: float = 0.09) -> MeshInstance3D:
+	var verts := PackedVector3Array()
+	var idx := PackedInt32Array()
+	for pts in points_list:
+		for i in range(pts.size() - 1):
+			if dashed and (i / 3) % 2 == 1:
+				continue
+			var a: Vector3 = pts[i]
+			var b: Vector3 = pts[i + 1]
+			var side := a.normalized().cross(b - a).normalized() * (width * 0.5)
+			var base := verts.size()
+			verts.append_array([a - side, a + side, b - side, b + side])
+			idx.append_array([base, base + 1, base + 2, base + 1, base + 3, base + 2])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_INDEX] = idx
+	var mesh := ArrayMesh.new()
+	if verts.size() > 0:
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.albedo_color = color
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	return mi
+
+func _latitude_circle(lat: float, radius: float, steps: int = 180) -> Array:
+	var pts: Array = []
+	for i in range(steps + 1):
+		pts.append(Geo.to_vec3(lat, -180.0 + 360.0 * i / steps, radius))
+	return pts
+
+func _meridian(lon: float, radius: float, steps: int = 90) -> Array:
+	var pts: Array = []
+	for i in range(steps + 1):
+		pts.append(Geo.to_vec3(-90.0 + 180.0 * i / steps, lon, radius))
+	return pts
+
+func _rebuild_grid() -> void:
+	_clear(_grid_node)
+	_noon_line.mesh = null
+	if not Settings.get_bool("show_grid"):
+		return
+	var lr := R + 0.03   # flush with the surface (just enough to avoid z-fighting)
+	var major: Array = []
+	if Settings.get_bool("show_equator"):
+		major.append(_latitude_circle(0.0, lr))
+	if Settings.get_bool("show_tropics"):
+		major.append(_latitude_circle(23.4367, lr))
+		major.append(_latitude_circle(-23.4367, lr))
+	if Settings.get_bool("show_polar_circles"):
+		major.append(_latitude_circle(66.5633, lr))
+		major.append(_latitude_circle(-66.5633, lr))
+	if major.size() > 0:
+		_grid_node.add_child(_line_mesh(major, Settings.get_color("color_grid")))
+	if Settings.get_bool("show_minor_grid"):
+		var minor: Array = []
+		for k in range(-11, 13):   # every 15°, including 0° and 180°
+			minor.append(_meridian(15.0 * k, lr, 180))
+		_grid_node.add_child(_line_mesh(minor, Settings.get_color("color_grid"), false, 0.09))
+
+func _hour_mesh(text: String, size: float, radius: float = 11.5) -> MeshInstance3D:
+	var tm := TextMesh.new()
+	tm.text = text
+	tm.font = Geo.label_font()
+	tm.font_size = 96
+	tm.pixel_size = 0.0125 * size
+	tm.depth = 0.35 * size
+	tm.curve_step = 0.5
+	var mi := MeshInstance3D.new()
+	mi.mesh = Shapes.bend_text(tm, radius)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Settings.get_color("color_hours")
+	mat.roughness = 0.55
+	mat.emission_enabled = true
+	mat.emission = Settings.get_color("color_hours") * 0.25
+	mi.material_override = mat
+	return mi
+
+func _rebuild_hours() -> void:
+	_clear(_hours_earth)
+	_clear(_hours_fixed)
+	var kind := Settings.get_string("hour_type")
+	if kind == Settings.HOURS_NONE:
+		return
+	var utc := Solar.now()
+	var utc_hours := fposmod(utc, 86400.0) / 3600.0
+	for k in range(-12, 12):
+		var text := ""
+		var parent: Node3D = _hours_fixed
+		var lon := 15.0 * k
+		match kind:
+			Settings.HOURS_NOON:
+				text = "+0" if k == 0 else ("%+d" % k).replace("-", "−")
+			Settings.HOURS_SOLAR:
+				text = "%02d:00" % int(posmod(12 + k, 24))
+			Settings.HOURS_WALL:
+				# Meridians turn with the Earth; each shows the wall-clock time there.
+				parent = _hours_earth
+				var h := fposmod(utc_hours + lon / 15.0, 24.0)
+				text = "%d:%02d" % [int(h), int((h - floor(h)) * 60.0)]
+			Settings.HOURS_LOCATION:
+				parent = _hours_earth
+				var home_lon := Settings.get_float("home_longitude")
+				lon = wrapf(home_lon + 15.0 * k, -180.0, 180.0)
+				text = "Home" if k == 0 else ("%+d" % k).replace("-", "−")
+		var mi := _hour_mesh(text, 1.0)
+		var basis := Geo.surface_basis(0.0, lon)
+		# Text reads along the meridian (top to bottom), as in Flatland.
+		basis = basis * Basis(Vector3.BACK, deg_to_rad(-90.0))
+		mi.transform = Transform3D(basis, Geo.to_vec3(0.0, lon, 11.5))
+		parent.add_child(mi)
+
+## Earthquakes in the shape chosen in Preferences (Flatland's EarthquakeShapes): animated or static
+## arrow, sphere, pulsating sphere, pyramid, cone, box, cylinder, capsule or tethered magnitude.
+## Each has the magnitude written on the surface, and quakes inside the "recent" window get the
+## chosen new-earthquake indicator.
+func _rebuild_quakes() -> void:
+	_clear(_quakes_node)
+	_dn_items = _dn_items.filter(func(i): return not (is_instance_valid(i["node"]) and i["node"].get_parent() != null and _quakes_node.is_ancestor_of(i["node"])))
+	_arrows.clear()
+	if not Settings.get_bool("enable_earthquakes"):
+		return
+	var now := Time.get_unix_time_from_system()
+	var recent_s := Settings.get_float("quake_recent_hours") * 3600.0
+	for q in QuakeService.visible_quakes():
+		var mag: float = q["magnitude"]
+		var lat: float = q["lat"]
+		var lon: float = q["lon"]
+		var col := QuakeService.magnitude_color(mag)
+		var holder := _make_quake_shape(q, col)
+		if holder != null:
+			_quakes_node.add_child(holder)
+		# Magnitude text lying on the surface.
+		var s := "%.2f" % mag
+		if s.ends_with("0"):
+			s = s.left(-1)
+		var em := 0.05 * (7.0 + mag)
+		var radial := R + 0.3 + (mag / 10.0) * 0.7
+		var t := _flat_text("M" + s, lat, lon, radial, em, 0.15, true, Geo.quake_font())
+		_quakes_node.add_child(t)
+		_register_dn(t, lat, lon, col, col)
+		if Settings.get_bool("quake_highlight_new") and now - float(q["time"]) <= recent_s:
+			_add_quake_indicator(q)
+
+func _quake_basis(lat: float, lon: float) -> Basis:
+	var b := Geo.surface_basis(lat, lon)
+	return Basis(b.x, b.z, b.x.cross(b.z))
+
+func _make_quake_shape(q: Dictionary, col: Color) -> Node3D:
+	var mag: float = q["magnitude"]
+	var lat: float = q["lat"]
+	var lon: float = q["lon"]
+	var mult := Shapes.scale_for("quake_scale")
+	var shape := Settings.get_string("quake_shape")
+	var plain := Shapes.plain(col)
+	match shape:
+		"Animated Arrow", "Static Arrow":
+			var animated := shape == "Animated Arrow"
+			var arrow_scale := (0.75 if animated else 0.74) * mult
+			# Animated arrows bounce with the tip touching the surface at the bottom of the bounce
+			# (never below it); static arrows hover as in Flatland.
+			var holder := _up_node(lat, lon, R + (0.667 * arrow_scale if animated else 0.7))
+			var arrow := Node3D.new()
+			arrow.scale = Vector3.ONE * arrow_scale
+			holder.add_child(arrow)
+			var head := PrismMesh.new()
+			head.size = Vector3(0.85, 0.667, 0.2)
+			var head_mi := MeshInstance3D.new()
+			head_mi.mesh = head
+			head_mi.rotation_degrees = Vector3(0, 0, 180)     # apex toward the surface
+			head_mi.position = Vector3(0, -0.333, 0)
+			arrow.add_child(head_mi)
+			var stem := BoxMesh.new()
+			stem.size = Vector3(0.2125, 1.0, 0.2)
+			var stem_mi := MeshInstance3D.new()
+			stem_mi.mesh = stem
+			stem_mi.position = Vector3(0, 0.5, 0)
+			arrow.add_child(stem_mi)
+			if animated:
+				_register_dn(head_mi, lat, lon, col, col)
+				_register_dn(stem_mi, lat, lon, col, col)
+				_arrows.append({"node": arrow, "dir": 1.0 if lat >= 0.0 else -1.0})
+				# Bounce toward the surface and back; faster for bigger quakes.
+				var d := maxf(0.2, (10.0 - mag) / 5.00000543)
+				arrow.position.y = 0.5
+				var tw := arrow.create_tween().set_loops()
+				tw.tween_property(arrow, "position:y", 0.0, d).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+				tw.tween_property(arrow, "position:y", 0.5, d).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+			else:
+				head_mi.material_override = plain
+				stem_mi.material_override = plain
+			return holder
+		"Sphere", "Pulsating Sphere":
+			var pulsing := shape == "Pulsating Sphere"
+			var holder := _up_node(lat, lon, R + 0.5)
+			var sph := SphereMesh.new()
+			var r := mag * 0.5 * (0.12 if pulsing else 0.1)
+			sph.radius = r
+			sph.height = r * 2.0
+			var mi := MeshInstance3D.new()
+			mi.mesh = sph
+			mi.material_override = Shapes.plain(Color(col, 0.6)) if pulsing else plain
+			holder.add_child(mi)
+			holder.scale = Vector3.ONE * (0.749 if pulsing else 0.9993) * mult
+			if pulsing:
+				var d := 0.7 + (10.0 - mag) * 0.05
+				var tw := mi.create_tween().set_loops()
+				tw.tween_property(mi, "scale", Vector3.ONE * 1.5, d)
+				tw.tween_property(mi, "scale", Vector3.ONE, d)
+			return holder
+		"Pyramid":
+			var holder := _up_node(lat, lon, R)
+			holder.scale = Vector3.ONE * 1.001 * mult
+			var mi := MeshInstance3D.new()
+			mi.mesh = Shapes.pyramid_mesh(0.5, 2.5, 0.5)
+			mi.material_override = plain
+			holder.add_child(mi)
+			return holder
+		"Cone", "Box", "Cylinder", "Capsule":
+			var holder := _up_node(lat, lon, R + 0.5)
+			var mi := MeshInstance3D.new()
+			match shape:
+				"Cone":
+					var cm := CylinderMesh.new()
+					cm.top_radius = 0.0
+					cm.bottom_radius = 0.5
+					cm.height = 3.5
+					mi.mesh = cm
+					holder.scale = Vector3.ONE * 1.002 * mult
+				"Box":
+					var bm := BoxMesh.new()
+					bm.size = Vector3(0.5, 2.5, 0.5)
+					mi.mesh = bm
+					holder.scale = Vector3.ONE * 0.99999 * mult
+				"Cylinder":
+					var cm := CylinderMesh.new()
+					cm.top_radius = 0.25
+					cm.bottom_radius = 0.25
+					cm.height = 2.5
+					mi.mesh = cm
+					holder.scale = Vector3.ONE * 0.9998 * mult
+				_:
+					var cp := CapsuleMesh.new()
+					cp.radius = 0.25
+					cp.height = 2.5
+					mi.mesh = cp
+					holder.scale = Vector3.ONE * 1.0003 * mult
+			mi.material_override = plain
+			holder.add_child(mi)
+			return holder
+		"Tethered Magnitude":
+			return _tethered_quake(q, col, mult)
+	return null
+
+## Pole topped with a translucent disc bearing the magnitude; recent quakes also get a spinning rim
+## of spheres (Flatland's TetheredNumber).
+func _tethered_quake(q: Dictionary, col: Color, mult: float) -> Node3D:
+	var lat: float = q["lat"]
+	var lon: float = q["lon"]
+	var local := float(q["magnitude"]) / 10.0
+	var holder := _up_node(lat, lon, R)
+	holder.scale = Vector3.ONE * mult
+	var height := 2.5 * local
+	var pole := MeshInstance3D.new()
+	var pm := CylinderMesh.new()
+	pm.top_radius = local * 0.0501
+	pm.bottom_radius = local * 0.0501
+	pm.height = height
+	pole.mesh = pm
+	pole.position = Vector3(0, height * 0.5, 0)
+	holder.add_child(pole)
+	_register_dn(pole, lat, lon, col, col)
+	var disc_r := 2.01 * local
+	var disc := MeshInstance3D.new()
+	var dm := CylinderMesh.new()
+	dm.top_radius = disc_r
+	dm.bottom_radius = disc_r
+	dm.height = 0.1
+	disc.mesh = dm
+	disc.material_override = Shapes.plain(Color(col, 0.6))
+	disc.position = Vector3(0, height, 0)
+	holder.add_child(disc)
+	var tm := TextMesh.new()
+	tm.text = "%.1f" % q["magnitude"]
+	tm.font = Geo.label_font(900)
+	tm.font_size = 64
+	tm.pixel_size = (0.6 + 0.3 * local) / 64.0
+	tm.depth = 0.05
+	var txt := MeshInstance3D.new()
+	txt.mesh = tm
+	txt.material_override = Shapes.plain(Color.BLACK)
+	txt.rotation_degrees = Vector3(-90, 0, 0)
+	txt.position = Vector3(0, height + 0.09, 0)
+	holder.add_child(txt)
+	var rim_r := disc_r + 0.101
+	var rim := MeshInstance3D.new()
+	var tr := TorusMesh.new()
+	tr.inner_radius = rim_r - 0.101
+	tr.outer_radius = rim_r + 0.101
+	rim.mesh = tr
+	rim.material_override = plain_for_rim(col)
+	rim.position = Vector3(0, height, 0)
+	holder.add_child(rim)
+	if Settings.get_bool("quake_highlight_new") and Time.get_unix_time_from_system() - float(q["time"]) <= Settings.get_float("quake_recent_hours") * 3600.0:
+		var sphere := SphereMesh.new()
+		sphere.radius = 0.215
+		sphere.height = 0.43
+		for a in range(0, 360, 45):
+			var sp := MeshInstance3D.new()
+			sp.mesh = sphere
+			sp.material_override = Shapes.plain(Color("#ffd700"))
+			sp.position = Vector3(rim_r * cos(deg_to_rad(a)), 0, rim_r * sin(deg_to_rad(a)))
+			rim.add_child(sp)
+		var speed := maxf(0.09994492, 5.0 * (1.0 - local))
+		var tw := rim.create_tween().set_loops()
+		tw.tween_property(rim, "rotation:y", PI, speed).as_relative()
+	return holder
+
+func plain_for_rim(col: Color) -> StandardMaterial3D:
+	return Shapes.plain(col)
+
+## New-earthquake indicators (Flatland's EarthquakeIndicators).
+func _add_quake_indicator(q: Dictionary) -> void:
+	var kind := Settings.get_string("quake_indicator")
+	if kind == "None":
+		return
+	var mag: float = q["magnitude"]
+	var lat: float = q["lat"]
+	var lon: float = q["lon"]
+	var fade := 1.0 - mag / 10.0
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.8
+	ring.outer_radius = 1.0
+	match kind:
+		"Static Ring", "Animated Ring":
+			var holder := _up_node(lat, lon, R + 0.3)
+			_quakes_node.add_child(holder)
+			var mi := MeshInstance3D.new()
+			mi.mesh = ring
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			holder.add_child(mi)
+			if kind == "Static Ring":
+				mi.material_override = Shapes.plain(Color("#ff2400"))
+			else:
+				mi.material_override = Shapes.plain(Color("#ffa080"))
+				var dur := 1.0 + fade
+				var tw := mi.create_tween().set_loops()
+				tw.tween_property(mi, "scale", Vector3.ONE * (1.2 + 0.3 * fade), dur)
+				tw.tween_property(mi, "scale", Vector3.ONE, dur)
+		"Radiating Rings":
+			var rr := TorusMesh.new()
+			rr.inner_radius = 0.75
+			rr.outer_radius = 1.05
+			var holder := _up_node(lat, lon, R + 0.02)
+			_quakes_node.add_child(holder)
+			var mi := MeshInstance3D.new()
+			mi.mesh = rr
+			var rmat := StandardMaterial3D.new()
+			rmat.albedo_color = Color(1.0, 0.627, 0.5, 0.8)
+			rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			rmat.emission_enabled = true
+			rmat.emission = Color("#ffa080") * 0.6
+			mi.material_override = rmat
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			holder.add_child(mi)
+			var dur := 1.0 + fade
+			var to_scale := 1.0 + 0.3 * fade
+			var rt := mi.create_tween().set_loops()
+			rt.tween_callback(func() -> void:
+				mi.scale = Vector3.ONE * 0.1
+				rmat.albedo_color.a = 0.8)
+			rt.tween_property(mi, "scale", Vector3.ONE * to_scale, dur)
+			rt.parallel().tween_property(rmat, "albedo_color:a", 0.0, 0.1).set_delay(dur - 0.1)
+		"Glowing Sphere":
+			var holder := _up_node(lat, lon, R)
+			_quakes_node.add_child(holder)
+			var mi := MeshInstance3D.new()
+			var sm := SphereMesh.new()
+			sm.radius = 0.75
+			sm.height = 1.5
+			mi.mesh = sm
+			mi.material_override = Shapes.plain(Color(1.0, 0.14, 0.0, 0.45))
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			holder.add_child(mi)
+		"Triangle Ring Inward", "Triangle Ring Outward":
+			var holder := _up_node(lat, lon, R + 0.3)
+			holder.scale = Vector3.ONE * 0.41
+			_quakes_node.add_child(holder)
+			var spin := Node3D.new()
+			holder.add_child(spin)
+			var tri := PrismMesh.new()
+			tri.size = Vector3(0.6, 0.8, 0.15)
+			var out := kind == "Triangle Ring Outward"
+			for i in range(13):
+				var a := TAU * i / 13.0
+				var mi := MeshInstance3D.new()
+				mi.mesh = tri
+				mi.material_override = Shapes.plain(Color("#ff2400"))
+				# Prism apex points +Y; lay it flat (tangent plane) pointing out or in along the ring.
+				mi.position = Vector3(1.2 * cos(a), 0, 1.2 * sin(a))
+				mi.basis = Basis(Vector3.UP, -a) * Basis(Vector3.BACK, deg_to_rad(-90.0 if out else 90.0)) * Basis(Vector3.RIGHT, deg_to_rad(90))
+				spin.add_child(mi)
+			var tw := spin.create_tween().set_loops()
+			tw.tween_property(spin, "rotation:y", TAU, 10.0 - mag + 2.0).as_relative()
+
+# MARK: - Time
+
+func _process(delta: float) -> void:
+	var vs := get_viewport().get_visible_rect().size
+	if vs != _vp_size:
+		_vp_size = vs
+		_apply_camera()
+	for a in _arrows:
+		if is_instance_valid(a["node"]):
+			(a["node"] as Node3D).rotation.y += a["dir"] * delta     # about 1 radian per second
+	if _pole_shafts.size() == 2:
+		(_pole_shafts[0] as Node3D).rotation.y += delta * deg_to_rad(225.0 / 4.59)
+		(_pole_shafts[1] as Node3D).rotation.y -= delta * deg_to_rad(225.0 / 4.59)
+	_tick += delta
+	if Settings.get_bool("attract_mode"):
+		_attract_angle += delta * TAU / 40.0
+		_earth.rotation.y = _attract_angle
+	else:
+		# Smoothly follow the clock (Flatland animates the rotation over about a second).
+		_earth.rotation.y = lerp_angle(_earth.rotation.y, _earth_angle, clampf(delta * 6.0, 0.0, 1.0))
+	if _tick >= 1.0:
+		_tick = 0.0
+		_update_time(false)
+	_update_hover()
+
+func _update_time(snap: bool) -> void:
+	var now := Solar.now()
+	var sub_lon := Solar.subsolar_longitude(now)
+	_earth_angle = -deg_to_rad(sub_lon)
+	if snap:
+		_earth.rotation.y = _earth_angle
+	var decl := deg_to_rad(Solar.declination(now))
+	_system.rotation.x = decl          # tilt the Earth; the sun stays fixed behind the camera
+	var sun_dir := Vector3(0, 0, 1)
+	for mat in [_earth_mat, _sea_mat]:
+		mat.set_shader_parameter("sun_dir", sun_dir)
+		mat.set_shader_parameter("night_level", 0.14 if Settings.get_bool("show_moon_light") else 0.04)
+	_sun.position = sun_dir * 100.0
+	_sun.look_at(Vector3.ZERO, Vector3.UP)
+	_moon.position = -sun_dir * 100.0
+	_moon.look_at(Vector3.ZERO, Vector3.UP)
+	# The noon meridian is the half great circle facing the sun.
+	_noon_line.rotation.y = 0.0
+	var stamp := int(now / 60.0)
+	if stamp != _last_hour_stamp:
+		_last_hour_stamp = stamp
+		_refresh_day_night()
+		if Settings.get_string("hour_type") == Settings.HOURS_WALL:
+			_rebuild_hours()
+
+# MARK: - Camera and interaction
+
+var _reset_tween: Tween
+
+## Return the camera to its default orientation. Animated over one second unless `animate` is false.
+func reset_view(animate: bool = true) -> void:
+	if _reset_tween != null and _reset_tween.is_valid():
+		_reset_tween.kill()
+	if not animate:
+		_yaw = 0.0
+		_pitch = 0.0
+		_distance = DEFAULT_DISTANCE
+		_pan = Vector2.ZERO
+		_apply_camera()
+		return
+	# Take the short way round to yaw 0.
+	_yaw = wrapf(_yaw, -PI, PI)
+	var y0 := _yaw
+	var p0 := _pitch
+	var d0 := _distance
+	var pan0 := _pan
+	_reset_tween = create_tween()
+	_reset_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	_reset_tween.tween_method(func(t: float) -> void:
+		_yaw = lerpf(y0, 0.0, t)
+		_pitch = lerpf(p0, 0.0, t)
+		_distance = lerpf(d0, DEFAULT_DISTANCE, t)
+		_pan = pan0.lerp(Vector2.ZERO, t)
+		_apply_camera(), 0.0, 1.0, 1.0)
+
+func _apply_camera() -> void:
+	_orbit.rotation = Vector3(_pitch, _yaw, 0.0)
+	# Keep the whole globe in view whatever the window shape: fit the narrower dimension.
+	var vs := get_viewport().get_visible_rect().size
+	var fit := 1.0
+	if vs.y > 0.0:
+		fit = maxf(1.0, 0.95 / (vs.x / vs.y))
+	var cam_z := _distance * fit
+	_camera.position = Vector3(_pan.x, _pan.y, cam_z)
+	# Keep the depth range tight around the globe so shadows stay sharp at this distance.
+	_camera.near = maxf(0.1, cam_z - 40.0)
+	_camera.far = cam_z + 40.0
+	_sun.directional_shadow_max_distance = cam_z + 40.0
+
+## Rotates the camera so the given location faces the viewer.
+func look_at_location(lat: float, lon: float) -> void:
+	# World direction of the place: local position -> Earth rotation -> seasonal tilt.
+	var v := _system.basis * (Basis(Vector3.UP, _earth_angle) * Geo.to_vec3(lat, lon, 1.0))
+	_yaw = atan2(v.x, v.z)
+	_pitch = -asin(clampf(v.y, -1.0, 1.0))
+	_apply_camera()
+
+## Development helper: set yaw/pitch (degrees) and distance directly.
+func set_camera(yaw_deg: float, pitch_deg: float, distance: float) -> void:
+	_yaw = deg_to_rad(yaw_deg)
+	_pitch = deg_to_rad(pitch_deg)
+	_distance = clampf(distance, MIN_DISTANCE, MAX_DISTANCE)
+	_apply_camera()
+
+func set_viewport_size(size: Vector2) -> void:
+	_vp_size = size
+
+func set_mouse_inside(inside: bool) -> void:
+	_mouse_inside = inside
+
+func handle_gui_input(event: InputEvent) -> void:
+	if Settings.get_bool("world_locked"):
+		return
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		match mb.button_index:
+			MOUSE_BUTTON_LEFT:
+				_dragging = mb.pressed
+				if mb.pressed and _reset_tween != null and _reset_tween.is_valid():
+					_reset_tween.kill()
+				if mb.pressed and mb.double_click:
+					_dragging = false
+					reset_view()   # double-click resets the view
+			MOUSE_BUTTON_WHEEL_UP:
+				_distance = clampf(_distance * 0.92, MIN_DISTANCE, MAX_DISTANCE)
+				_apply_camera()
+			MOUSE_BUTTON_WHEEL_DOWN:
+				_distance = clampf(_distance * 1.08, MIN_DISTANCE, MAX_DISTANCE)
+				_apply_camera()
+			MOUSE_BUTTON_RIGHT:
+				if mb.pressed:
+					_emit_click(mb.position)
+	elif event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		_mouse_pos = mm.position
+		if _dragging:
+			if mm.meta_pressed or mm.alt_pressed or mm.ctrl_pressed:
+				# Command/Option/Ctrl-drag moves the globe across the view (SceneKit's camera pan).
+				var k := 2.0 * _distance * tan(deg_to_rad(_camera.fov) * 0.5) / maxf(1.0, get_viewport().get_visible_rect().size.y)
+				_pan.x = clampf(_pan.x - mm.relative.x * k, -40.0, 40.0)
+				_pan.y = clampf(_pan.y + mm.relative.y * k, -40.0, 40.0)
+			else:
+				var speed := 0.004 * (_distance / DEFAULT_DISTANCE)
+				_yaw -= mm.relative.x * speed
+				_pitch = clampf(_pitch - mm.relative.y * speed, -1.45, 1.45)
+			_apply_camera()
+	elif event is InputEventMagnifyGesture:
+		_distance = clampf(_distance / (event as InputEventMagnifyGesture).factor, MIN_DISTANCE, MAX_DISTANCE)
+		_apply_camera()
+	elif event is InputEventPanGesture:
+		var pg := event as InputEventPanGesture
+		_yaw += pg.delta.x * 0.01
+		_pitch = clampf(_pitch + pg.delta.y * 0.01, -1.45, 1.45)
+		_apply_camera()
+
+## Intersect a screen point with the globe and return {"hit": bool, "lat": f, "lon": f}.
+func pick(screen_pos: Vector2) -> Dictionary:
+	var origin := _camera.project_ray_origin(screen_pos)
+	var dir := _camera.project_ray_normal(screen_pos)
+	var b := origin.dot(dir)
+	var c := origin.dot(origin) - R * R
+	var disc := b * b - c
+	if disc < 0.0:
+		return {"hit": false}
+	var t := -b - sqrt(disc)
+	if t < 0.0:
+		return {"hit": false}
+	var world_pt := origin + dir * t
+	var local_pt := _earth.to_local(world_pt)
+	var ll := Geo.vec3_to_latlon(local_pt)
+	return {"hit": true, "lat": ll.x, "lon": ll.y}
+
+func _update_hover() -> void:
+	if not _mouse_inside or not Settings.get_bool("mouse_tracking"):
+		return
+	var p := pick(_mouse_pos)
+	if p["hit"]:
+		hover_changed.emit(p["lat"], p["lon"], true)
+	else:
+		hover_changed.emit(0.0, 0.0, false)
+
+func _emit_click(pos: Vector2) -> void:
+	var p := pick(pos)
+	if p["hit"]:
+		location_clicked.emit(p["lat"], p["lon"])
+
+func capture() -> Image:
+	return get_viewport().get_texture().get_image()

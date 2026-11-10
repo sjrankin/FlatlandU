@@ -1,0 +1,65 @@
+extends HSplitContainer
+## Map chooser (Flatland's map preference panel): grouped list of every map plus a preview.
+
+signal map_chosen(map_name: String)
+
+var _tree: Tree
+var _preview: TextureRect
+var _caption: Label
+var _preview_file := ""
+
+func _ready() -> void:
+	custom_minimum_size = Vector2(640, 380)
+	_tree = Tree.new()
+	_tree.hide_root = true
+	_tree.custom_minimum_size.x = 260
+	_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	add_child(_tree)
+	var right := VBoxContainer.new()
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_preview = TextureRect.new()
+	_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_preview.custom_minimum_size = Vector2(320, 200)
+	right.add_child(_preview)
+	_caption = Label.new()
+	_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	right.add_child(_caption)
+	add_child(right)
+	var root := _tree.create_item()
+	var groups := {}
+	var current := Settings.get_string("map_type")
+	for m in MapCatalog.maps:
+		var g := MapCatalog.group_for(m)
+		if not groups.has(g):
+			var gi := _tree.create_item(root)
+			gi.set_text(0, g)
+			gi.set_selectable(0, false)
+			gi.set_custom_color(0, Color("#8fb8ff"))
+			groups[g] = gi
+		var it := _tree.create_item(groups[g])
+		it.set_text(0, str(m["name"]))
+		it.set_metadata(0, m)
+		if m["name"] == current:
+			it.select(0)
+			_show_preview(m)
+	_tree.item_selected.connect(_on_selected)
+	_tree.item_activated.connect(_on_selected)
+	MapCatalog.texture_ready.connect(func(file: String, tex: Texture2D) -> void:
+		if file == _preview_file and is_instance_valid(_preview):
+			_preview.texture = tex)
+
+func _on_selected() -> void:
+	var it := _tree.get_selected()
+	if it == null or it.get_metadata(0) == null:
+		return
+	var m: Dictionary = it.get_metadata(0)
+	_show_preview(m)
+	Settings.set_value("map_type", m["name"])
+	map_chosen.emit(m["name"])
+
+func _show_preview(m: Dictionary) -> void:
+	_preview_file = str(m["globe"])
+	_caption.text = "%s  (%s)" % [m["name"], _preview_file]
+	_preview.texture = MapCatalog.request(_preview_file)

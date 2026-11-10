@@ -1,0 +1,614 @@
+[
+ {
+  "id": "Standard",
+  "name": "Standard",
+  "globe": "LandMask2.png",
+  "north": "WorldNorth.png",
+  "south": "WorldSouth.png",
+  "light": 1.0,
+  "sea": "SeaMask2.png"
+ },
+ {
+  "id": "StandardSea",
+  "name": "StandardSea",
+  "globe": "SeaMask2.png",
+  "north": "",
+  "south": "WorldSouth.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "BlueMarble",
+  "name": "Blue Marble",
+  "globe": "BlueMarble.png",
+  "north": "BlueMarbleNorthCenter.png",
+  "south": "BlueMarbleSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "DarkBlueMarble",
+  "name": "Dark Blue Marble",
+  "globe": "BlackMarble2.png",
+  "north": "BlackMarbleNorthCenter2.png",
+  "south": "BlackMarbleSouthCenter2.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Continents",
+  "name": "Continents",
+  "globe": "SimpleMapContinents.png",
+  "north": "SimpleMapContinentsNorthCenter.png",
+  "south": "SimpleMapContinentsSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Simple",
+  "name": "Simple",
+  "globe": "SimpleMap1.png",
+  "north": "SimpleNorthCenter.png",
+  "south": "SimpleSouthCenter.png",
+  "light": 0.85,
+  "sea": ""
+ },
+ {
+  "id": "SimpleBorders1",
+  "name": "Simple with Borders 1",
+  "globe": "SimpleMapWithBorders1.png",
+  "north": "SimpleMapWithBordersNorthCenter1.png",
+  "south": "SimpleMapWithBordersSouthCenter1.png",
+  "light": 0.5,
+  "sea": ""
+ },
+ {
+  "id": "HalftoneLine",
+  "name": "Halftone Lined",
+  "globe": "HalftoneLine.png",
+  "north": "HalftoneLineNorthCenter.png",
+  "south": "HalftoneLineSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "HalftoneVerticalLine",
+  "name": "Halftone Vertical Lined",
+  "globe": "HalftoneVerticalLines.png",
+  "north": "HalftoneVerticalLinesNorthCenter.png",
+  "south": "HalftoneVerticalLinesSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Pink",
+  "name": "Glossy Pink",
+  "globe": "PinkMap.png",
+  "north": "PinkMapNorthCenter.png",
+  "south": "PinkMapSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Cartoon",
+  "name": "Cartoon Map",
+  "globe": "CartoonMap.png",
+  "north": "CartoonMapNorthCenter.png",
+  "south": "CartoonMapSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Dithered",
+  "name": "Dithered",
+  "globe": "DitheredMap.png",
+  "north": "DitheredMapNorthCenter.png",
+  "south": "DitheredMapSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Bronze",
+  "name": "Bronze Map",
+  "globe": "BronzeMap.png",
+  "north": "BronzeMapNorthCenter.png",
+  "south": "BronzeMapSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Abstract2",
+  "name": "Abstract Map 2",
+  "globe": "Abstract2.png",
+  "north": "Abstract2NorthCenter.png",
+  "south": "Abstract2SouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Surreal1",
+  "name": "Surreal Map",
+  "globe": "Surreal1.png",
+  "north": "Surreal1NorthCenter.png",
+  "south": "Surreal1SouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "OilPainting1",
+  "name": "Oil Painting Map",
+  "globe": "ArtMap4.png",
+  "north": "ArtMap4NorthCenter.png",
+  "south": "ArtMap4SouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "StaticAerosol",
+  "name": "Static Aerosol",
+  "globe": "Aerosol.png",
+  "north": "AerosolNorthCenter.png",
+  "south": "AerosolSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Topographical1",
+  "name": "Topographic 1",
+  "globe": "Topographical3600x1800.png",
+  "north": "Topographical1NorthCenter.png",
+  "south": "Topographical1SouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "MarsViking",
+  "name": "Martian Viking Map",
+  "globe": "MarsViking.png",
+  "north": "MarsVikingNorthCenter.png",
+  "south": "MarsVikingSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "MOLAVerticalRoughness",
+  "name": "Mars Vertical Roughness Map",
+  "globe": "MarsVerticalRoughness.png",
+  "north": "MarsVerticalRoughnessNorthCenter.png",
+  "south": "MarsVerticalRoughnessSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "MarsMariner9",
+  "name": "Martian Mariner 9 Geologic Map",
+  "globe": "MarsM9GeoMap.png",
+  "north": "MarsM9GeoMapNorthCenter.png",
+  "south": "MarsM9GeoMapSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "LROMap",
+  "name": "Lunar Reconnaissance Orbiter Moon Map",
+  "globe": "LROMoon.png",
+  "north": "LRONorthCenter.png",
+  "south": "LROSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "LunarGeoMap",
+  "name": "Lunar Geologic Map",
+  "globe": "LunarGeoMap.png",
+  "north": "LunarGeoMapNorthCenter.png",
+  "south": "LunarGeoMapSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Blueprint",
+  "name": "Blueprint-style Map",
+  "globe": "WorldBluePrint.png",
+  "north": "WorldBluePrintNorthCenter.png",
+  "south": "WorldBluePrintSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Skeleton",
+  "name": "Skeleton Map",
+  "globe": "WorldSkeleton.png",
+  "north": "WorldSkeletonNorthCenter.png",
+  "south": "WorldSkeletonSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Polygons",
+  "name": "Polygonized Map",
+  "globe": "WorldPolygonize.png",
+  "north": "WorldPolygonizeNorthCenter.png",
+  "south": "WorldPolygonizeSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "ColorInk",
+  "name": "Color Ink Map",
+  "globe": "WorldInkColor.png",
+  "north": "WorldInkColorNorthCenter.png",
+  "south": "WorldInkColorSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Warhol",
+  "name": "Worhol Style Map",
+  "globe": "WorldWarhol.png",
+  "north": "WorldWarholNorthCenter.png",
+  "south": "WorldWarholSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Voronoi",
+  "name": "Voronoi Style Map",
+  "globe": "WorldVoronoi.png",
+  "north": "WorldVoronoiNorthCenter.png",
+  "south": "WorldVoronoiSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "SurrealTopographic",
+  "name": "Surreal Topographic",
+  "globe": "EarthTopoGlowingEdges1.png",
+  "north": "EarthTopoGlowingEdges1NorthCenter.png",
+  "south": "EarthTopoGlowingEdges1SouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "BubbleWorld",
+  "name": "Bubble World",
+  "globe": "BubbleWorld.png",
+  "north": "BubbleWorldNorthCenter.png",
+  "south": "BubbleWorldSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "GaiaSky",
+  "name": "Gaia Star Map",
+  "globe": "GaiaSky.png",
+  "north": "GaiaSkyNorthCenter.png",
+  "south": "GaiaSkySouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "TychoSky",
+  "name": "Tycho Star Map",
+  "globe": "TychoSky.png",
+  "north": "TychoSkyNorthCenter.png",
+  "south": "TychoSkySouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "NASAStarsInverted",
+  "name": "Inverted Star Map",
+  "globe": "NASAStarMapInverted.png",
+  "north": "NASAStarMapInvertedNorthCenter.png",
+  "south": "NASAStarMapInvertedSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "OnlyTectonic",
+  "name": "Tectonic Map",
+  "globe": "OnlyPlates2.png",
+  "north": "OnlyPlates2NorthCenter.png",
+  "south": "OnlyPlates2SouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "TectonicOverlay",
+  "name": "Overlayed Tectonic",
+  "globe": "ColorTectonicsOverlay.png",
+  "north": "ColorTectonicsNorthCenterOverlay.png",
+  "south": "ColorTectonicsSouthCenterOverlay.png",
+  "light": 1.0,
+  "sea": "DitheredMap.png"
+ },
+ {
+  "id": "BlackWhite",
+  "name": "Black and White Map",
+  "globe": "BlackWhite.png",
+  "north": "BlackWhiteNorthCenter.png",
+  "south": "BlackWhiteSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "BlackWhiteShiny",
+  "name": "Shiny Black and White Map",
+  "globe": "BlackWhiteShiny.png",
+  "north": "BlackWhiteNorthCenter.png",
+  "south": "BlackWhiteSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "WhiteBlack",
+  "name": "White and Black Map",
+  "globe": "WhiteBlack.png",
+  "north": "WhiteBlackNorthCenter.png",
+  "south": "WhiteBlackSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Jupiter",
+  "name": "Jupiter",
+  "globe": "Jupiter.png",
+  "north": "JupiterNorthCenter.png",
+  "south": "JupiterSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "SquareWorld",
+  "name": "World of Squares",
+  "globe": "WorldSquare.png",
+  "north": "WorldSquareNorthCenter.png",
+  "south": "WorldSquareSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "LevelWorld",
+  "name": "World of Levels",
+  "globe": "WorldSquareLevels.png",
+  "north": "WorldSquareLevelsNorthCenter.png",
+  "south": "WorldSquareLevelsSouthCentered.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "GlowingCoasts",
+  "name": "Glowing Coasts",
+  "globe": "WorldGlowingCoasts.png",
+  "north": "WorldGlowingCoastsNorthCenter.png",
+  "south": "WorldGlowingCoastsSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "StainedGlass",
+  "name": "Stained Glass",
+  "globe": "WorldStainedGlass1.png",
+  "north": "WorldStainedGlass1NorthCenter.png",
+  "south": "WorldStainedGlass1SouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "PaperWorld",
+  "name": "Paper World",
+  "globe": "PaperWorld.png",
+  "north": "PaperWorldNorthCenter.png",
+  "south": "PaperWorldSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "TychoConstellations",
+  "name": "Tycho Star Map with Lines",
+  "globe": "TychoWithConstellations.png",
+  "north": "TychoConstellationsNorthCenter.png",
+  "south": "TychoConstellationsSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "SurrealTimeZone",
+  "name": "Surreal Time Zone Map",
+  "globe": "SurrealTimeZones.png",
+  "north": "SurrealTimeZoneNorthCenter.png",
+  "south": "SurrealTimeZoneSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "HatchedTimeZones",
+  "name": "Hatched Time Zone Map",
+  "globe": "HatchedTimeZones.png",
+  "north": "HatchedTimeZonesNorthCenter.png",
+  "south": "HatchedTimeZoneSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "PaperTimeZones",
+  "name": "Paper Time Zone Map",
+  "globe": "PaperTimeZones.png",
+  "north": "PaperTimeZonesNorthCenter.png",
+  "south": "PaperTimeZonesSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "ColorfulTimeZones",
+  "name": "Colorful Time Zone Map",
+  "globe": "TimeZoneMap3.png",
+  "north": "TimeZoneMap3NorthCenter.png",
+  "south": "TimeZoneMap3SouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "SimplePoliticalMap1",
+  "name": "Simple Political Map 1",
+  "globe": "SimplePoliticalWorldMap.png",
+  "north": "SimplePoliticalWorldMapNorthCenter.png",
+  "south": "SimplePoliticalWorldMapSouthCenter.png",
+  "light": 0.5,
+  "sea": ""
+ },
+ {
+  "id": "SimplePoliticalMap1Big",
+  "name": "Simple Political Map 1 Big",
+  "globe": "SimplePoliticalMap1_7200x3600.png",
+  "north": "SimplePoliticalWorldMapNorthCenter.png",
+  "south": "SimplePoliticalWorldMapSouthCenter.png",
+  "light": 0.5,
+  "sea": ""
+ },
+ {
+  "id": "TransparentOcean",
+  "name": "Transparent Ocean",
+  "globe": "TransparentOceanMap.png",
+  "north": "SimplePoliticalWorldMapNorthCenter.png",
+  "south": "SimplePoliticalWorldMapSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "MODIS",
+  "name": "MODIS",
+  "globe": "MODIS.png",
+  "north": "MODISNorthCenter.png",
+  "south": "MODISSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "TimeZone4",
+  "name": "Time Zone Map 4",
+  "globe": "TimeZone4.png",
+  "north": "TimeZone4NorthCenter.png",
+  "south": "TimeZone4SouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Debug1",
+  "name": "Harlequin Black and White",
+  "globe": "BlackWhiteHarlequin.png",
+  "north": "BlackWhiteHarlequinNorth.png",
+  "south": "BlackWhiteHarlequinSouth.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Debug2",
+  "name": "Vertical Time Zones",
+  "globe": "BWSimpleTimeZones.png",
+  "north": "BWSimpleRoundTimeZones.png",
+  "south": "BWSimpleRoundTimeZones.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Debug3",
+  "name": "Harlequin Black with Color",
+  "globe": "HarlequinMap.png",
+  "north": "BlackWhiteHarlequinNorth.png",
+  "south": "BlackWhiteHarlequinSouth.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Debug4",
+  "name": "Black White Checkerboard",
+  "globe": "BWCheckerboard.png",
+  "north": "BWCheckerboardRound.png",
+  "south": "BWCheckerboardRound.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Debug5",
+  "name": "Black Color Checkerboard",
+  "globe": "BlackClearCheckerboard.png",
+  "north": "BWCheckerboardRound.png",
+  "south": "BWCheckerboardRound.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Debug6",
+  "name": "Small Grid",
+  "globe": "SmallGridMap.png",
+  "north": "SmallGridMapRound.png",
+  "south": "SmallGridMapRound.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "Debug7",
+  "name": "Big Grid",
+  "globe": "BigGridMap.png",
+  "north": "BigGridMapRound.png",
+  "south": "BigGridMapRound.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "USGS",
+  "name": "USGS",
+  "globe": "USGSWorld.png",
+  "north": "USGSWorldNorthCenter.png",
+  "south": "USGSWorldSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "StylizedSea1",
+  "name": "Stylized Sea 1",
+  "globe": "LandMask2.png",
+  "north": "WorldNorth.png",
+  "south": "WorldSouth.png",
+  "light": 1.0,
+  "sea": "JapanesePattern4.png"
+ },
+ {
+  "id": "EarthquakeMap",
+  "name": "Earthquake Map",
+  "globe": "EarthquakeLandMap.png",
+  "north": "EarthquakeLandMapNorthCenter.png",
+  "south": "EarthquakeLandMapSouthCenter.png",
+  "light": 0.5,
+  "sea": ""
+ },
+ {
+  "id": "RedTectonicLines",
+  "name": "Red Tectonic Lines",
+  "globe": "",
+  "north": "",
+  "south": "",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "CitiesAtNight",
+  "name": "Cities at Night",
+  "globe": "CitiesAtNight.png",
+  "north": "CitiesAtNightNorthCenter.png",
+  "south": "CitiesAtNightSouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ },
+ {
+  "id": "TimeZoneOverlay",
+  "name": "Timezone Overlay",
+  "globe": "TZOverlay.png",
+  "north": "TZOverlayNorthCenter.png",
+  "south": "TZOverlaySouthCenter.png",
+  "light": 1.0,
+  "sea": ""
+ }
+]
