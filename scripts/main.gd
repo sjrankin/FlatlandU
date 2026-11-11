@@ -31,7 +31,8 @@ var _more_menu: PopupMenu
 var _fps_label: Label
 var _fps_accum := 0.0
 var _status: PanelContainer
-var _toolbar: HBoxContainer
+var _toolbar: Container
+var _toolbar_style: StyleBoxFlat
 var _debug_grid: GridContainer
 var _debug_values: Dictionary = {}
 var _view_buttons: Dictionary = {}
@@ -55,6 +56,7 @@ var _sounds: Dictionary = {}
 var _player: AudioStreamPlayer
 var _open_on_start := ""
 var _resize_to := ""
+var _native_snap := ""
 var _cam_args := PackedFloat64Array()
 var _shot_path := ""
 var _shot_frames := 0
@@ -64,15 +66,15 @@ func _ready() -> void:
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	if Layout.is_phone():
 		# Bigger default text for every label, button, menu and dialog on a phone.
-		theme = Theme.new()
-		theme.default_font_size = Layout.font(16)
+		theme = PhoneTheme.build()
 	_bg = ColorRect.new()
 	_bg.color = Settings.get_color("color_background")
 	_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(_bg)
 	_content = Control.new()
 	_content.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_content.offset_top = _toolbar_height() + _insets().y
+	_content.offset_top = _insets().y if Layout.is_phone() else _toolbar_height() + _insets().y
+	_content.offset_bottom = -(_toolbar_height() + _insets().w) if Layout.is_phone() else 0.0   # phones: toolbar at the bottom
 	_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_content)
 	_build_views()
@@ -124,6 +126,8 @@ func _parse_command_line() -> void:
 			_resize_to = arg.substr(9)
 		elif arg.begins_with("--open="):
 			_open_on_start = arg.substr(7)
+		elif arg.begins_with("--native-snap="):
+			_native_snap = arg.substr(14)   # development: save a picture of the native screen, then quit
 		elif arg.begins_with("--hours="):
 			Settings.override("hour_type", arg.substr(8))
 
@@ -230,7 +234,7 @@ func _build_overlays() -> void:
 	_status.anchor_left = 0.04
 	_status.anchor_right = 0.96
 	# One line on a desktop; two lines of larger text on a phone, kept above the home indicator.
-	var bottom_gap := 12.0 * Layout.ui_scale() + _insets().w
+	var bottom_gap := 12.0 * Layout.ui_scale() + (0.0 if Layout.is_phone() else _insets().w)   # phones: the content area already stops above the toolbar
 	_status.offset_bottom = -bottom_gap
 	_status.offset_top = -bottom_gap - (44.0 if not Layout.is_phone() else 2.0 * Layout.font(22, 0.85) * 1.5 + 36.0)
 	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -293,6 +297,7 @@ func _on_more_menu(id: int) -> void:
 
 func _update_welcome_button(showing: bool) -> void:
 	_welcome_button.icon = load(ICON_DIR + ("GlobeIconSelected" if showing else "GlobeIcon") + ".png")
+	NativeUI.refresh_toolbar()
 
 func _icon_button(icon_name: String, label: String, tip: String, action: Callable) -> Button:
 	var b := Button.new()
@@ -302,7 +307,17 @@ func _icon_button(icon_name: String, label: String, tip: String, action: Callabl
 	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	b.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
 	var s := Layout.ui_scale()
-	b.custom_minimum_size = Vector2(72, 50) * s
+	b.custom_minimum_size = Vector2(60 if Layout.is_phone() else 72, 50) * s
+	if Layout.is_phone():
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL   # the buttons share the row evenly
+		# The phone theme's big button padding would make these icon buttons far wider than their label.
+		for box_name in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
+			var e := StyleBoxEmpty.new()
+			e.content_margin_left = 4
+			e.content_margin_right = 4
+			e.content_margin_top = 2
+			e.content_margin_bottom = 2
+			b.add_theme_stylebox_override(box_name, e)
 	b.add_theme_constant_override("icon_max_width", int(24 * s))
 	b.add_theme_font_size_override("font_size", Layout.font(11))
 	for c in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
@@ -326,17 +341,24 @@ func _build_toolbar() -> void:
 	sb.content_margin_top = 4
 	sb.content_margin_bottom = 4
 	_toolbar_bar.add_theme_stylebox_override("panel", sb)
-	_toolbar_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_toolbar_bar.offset_top = _insets().y
-	_toolbar_bar.offset_bottom = _insets().y + _toolbar_height()
+	_toolbar_style = sb
 	add_child(_toolbar_bar)
+	_place_toolbar()
 	# The toolbar scrolls sideways when it is wider than the screen (a phone in portrait).
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER   # still scrolls by touch or wheel
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_toolbar_bar.add_child(scroll)
-	_toolbar = HBoxContainer.new()
-	_toolbar.add_theme_constant_override("separation", int(4 * Layout.ui_scale()))
+	if Layout.is_phone():
+		# A grid, so every button is visible: it wraps onto a second row instead of scrolling sideways.
+		var grid := GridContainer.new()
+		grid.add_theme_constant_override("h_separation", int(4 * Layout.ui_scale()))
+		grid.add_theme_constant_override("v_separation", 0)
+		_toolbar = grid
+	else:
+		_toolbar = HBoxContainer.new()
+		_toolbar.add_theme_constant_override("separation", int(4 * Layout.ui_scale()))
+	_toolbar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_toolbar)
 	_icon_button("InfoIcon", "About", "View information about Flatland.", _action_about)
 	_icon_button("DebugIcon", "Debugger", "Open the debugger.", func() -> void: _popup(_debugger))
@@ -351,6 +373,9 @@ func _build_toolbar() -> void:
 	_build_more_button()
 	_globe.intro_changed.connect(_update_welcome_button)
 	_update_welcome_button(_globe.is_intro_showing())
+	_place_toolbar()   # now that the buttons exist, size the bar to the rows they need
+	if NativeUI.toolbar_wanted() and NativeUI.show_toolbar(self) and _native_toolbar_on():
+		_toolbar_bar.visible = false
 
 func _build_dialogs() -> void:
 	_prefs = load("res://scripts/ui/prefs_dialog.gd").new()
@@ -365,6 +390,7 @@ func _build_dialogs() -> void:
 	for w in [_prefs, _about, _times, _quake_list, _live_status, _locations, _regions, _debugger, _satellites]:
 		w.visible = false
 		add_child(w)
+		PhoneSheet.wrap(w)   # full-screen sheet on phones; no-op on desktop
 	_quake_list.quake_chosen.connect(_on_quake_chosen)
 	_prefs.open_satellites.connect(func() -> void: _popup(_satellites))
 	_snapshot_dialog = FileDialog.new()
@@ -378,6 +404,16 @@ func _build_dialogs() -> void:
 # MARK: - Actions (names follow Flatland's IBActions)
 
 func _popup(w: Window, size_hint: Vector2i = Vector2i.ZERO) -> void:
+	# iOS (and macOS with --native-ui): the dialog's native SwiftUI screen, when the extension is there.
+	if NativeUI.wanted() and NativeUI.present(w):
+		return
+	if Layout.is_phone() and w.has_meta("phone_sheet"):
+		# A full-screen sheet that slides up from the toolbar at the bottom (see PhoneSheet).
+		var ins := _insets()
+		var area := get_viewport_rect().size
+		var rect := Rect2i(Vector2i(ins.x, ins.y), Vector2i(area.x - ins.x - ins.z, area.y - ins.y - ins.w))
+		PhoneSheet.present(w, rect, int(area.y - ins.w - _phone_toolbar_height()))
+		return
 	if size_hint != Vector2i.ZERO:
 		w.size = size_hint
 	if Layout.is_phone() and not w.has_meta("phone_sized"):
@@ -395,7 +431,7 @@ func _action_quake_list() -> void: _popup(_quake_list)
 func _action_live_status() -> void: _popup(_live_status)
 
 func _action_select_map() -> void:
-	_prefs.popup_centered()
+	_popup(_prefs)
 	var tabs := _prefs.find_children("*", "TabContainer", true, false)
 	if tabs.size() > 0:
 		(tabs[0] as TabContainer).current_tab = 1
@@ -428,6 +464,43 @@ func _save_snapshot(path: String) -> void:
 		_status.post("Could not save the snapshot.", 5.0)
 	_snapshot_image = null
 
+# MARK: - Touch pinch
+
+var _touches := {}          # finger index -> screen position, for the fingers currently down
+var _pinch_span := 0.0      # distance between the first two fingers at the last event
+
+## Godot only synthesizes pinch (magnify) gestures from a trackpad, not from a touch screen, so
+## pinch-to-zoom is worked out here from the raw touch events and sent to the visible view.
+func _input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		if st.pressed:
+			_touches[st.index] = st.position
+		else:
+			_touches.erase(st.index)
+		_pinch_span = _touch_span()
+		_pinching_view(_touches.size() >= 2)
+	elif event is InputEventScreenDrag:
+		var sd := event as InputEventScreenDrag
+		_touches[sd.index] = sd.position
+		if _touches.size() >= 2:
+			var span := _touch_span()
+			if _pinch_span > 1.0 and span > 1.0:
+				var view: Node = _flat if _flat.visible else _globe
+				view.pinch_zoom(span / _pinch_span)
+			_pinch_span = span
+
+func _touch_span() -> float:
+	if _touches.size() < 2:
+		return 0.0
+	var keys := _touches.keys()
+	keys.sort()
+	return (_touches[keys[0]] as Vector2).distance_to(_touches[keys[1]])
+
+func _pinching_view(on: bool) -> void:
+	_flat.set_pinching(on)
+	_globe.set_pinching(on)
+
 # MARK: - Events
 
 func _on_setting_changed(key: String, _value: Variant) -> void:
@@ -435,22 +508,114 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 		"view_type":
 			_apply_view_type()
 		"world_locked":
+			NativeUI.refresh_toolbar()
 			_lock_button.icon = load(ICON_DIR + ("LockWorldIcon" if Settings.get_bool("world_locked") else "UnlockWorldIcon") + ".png")
 		"show_debug_grid":
 			_debug_grid.visible = Settings.get_bool("show_debug_grid")
 		"color_background":
 			_bg.color = Settings.get_color("color_background")
 
+## Phones: how many toolbar buttons fit in one row of the current width.
+func _phone_toolbar_columns() -> int:
+	var ins := _insets()
+	var width := get_viewport_rect().size.x - ins.x - ins.z - 24.0
+	var per_button := 60.0 * Layout.ui_scale()
+	for b in _toolbar.get_children():   # the widest button (its label) decides how many fit
+		per_button = maxf(per_button, (b as Control).get_combined_minimum_size().x + 4.0 * Layout.ui_scale())
+	return clampi(int(floor(width / per_button)), 1, maxi(1, _toolbar.get_child_count()))
+
+## Phones: height of the toolbar, which is two (or more) rows when the buttons do not fit in one.
+func _phone_toolbar_height() -> int:
+	if _native_toolbar_on():
+		return NativeUI.toolbar_height()   # the SwiftUI bar measures itself
+	if _toolbar == null or not (_toolbar is GridContainer):
+		return _toolbar_height()
+	var cols := _phone_toolbar_columns()
+	(_toolbar as GridContainer).columns = cols
+	var rows := int(ceil(float(_toolbar.get_child_count()) / float(cols)))
+	return _toolbar_height() * maxi(rows, 1)
+
+## On iOS the button bar is a SwiftUI view (see NativeUI) and the Godot one stays hidden.
+func _native_toolbar_on() -> bool:
+	return Layout.is_ios() and NativeUI.toolbar_wanted()
+
+## The native bar's buttons (same commands as the Godot toolbar).
+func native_toolbar() -> Array:
+	return [
+		{"id": "about", "title": "About", "symbol": "info.circle"},
+		{"id": "debugger", "title": "Debugger", "symbol": "ladybug"},
+		{"id": "live", "title": "Live Data", "symbol": "antenna.radiowaves.left.and.right"},
+		{"id": "prefs", "title": "Preferences", "symbol": "gearshape"},
+		{"id": "lock", "title": "Lock", "symbol": "lock.fill" if Settings.get_bool("world_locked") else "lock.open"},
+		{"id": "reset", "title": "Reset View", "symbol": "arrow.counterclockwise"},
+		{"id": "snapshot", "title": "Snapshot", "symbol": "camera"},
+		{"id": "quakes", "title": "Earthquakes", "symbol": "waveform.path.ecg"},
+		{"id": "welcome", "title": "Welcome", "symbol": "globe", "selected": _globe.is_intro_showing()},
+		{"id": "more", "title": "More", "symbol": "ellipsis.circle", "menu": [
+			{"id": "times", "title": "Today's Times…"},
+			{"id": "locations", "title": "My Locations…"},
+			{"id": "regions", "title": "Earthquake Regions…"},
+			{"id": "refresh", "title": "Refresh Earthquakes"}]},
+	]
+
+func native_toolbar_event(id: String) -> void:
+	match id:
+		"about": _action_about()
+		"debugger": _popup(_debugger)
+		"live": _action_live_status()
+		"prefs": _action_preferences()
+		"lock": Settings.set_value("world_locked", not Settings.get_bool("world_locked"))
+		"reset": _action_reset_view()
+		"snapshot": _action_snapshot()
+		"quakes": _action_quake_list()
+		"welcome": _globe.toggle_intro()
+		"times": _on_more_menu(1)
+		"locations": _on_more_menu(2)
+		"regions": _on_more_menu(3)
+		"refresh": _on_more_menu(4)
+
+## The native bar's height changed (first shown, or the phone was rotated): make room for it.
+func native_toolbar_resized() -> void:
+	_place_toolbar()
+	_relayout()
+
+## Put the toolbar where it belongs: along the top on a desktop, along the bottom (above the home
+## indicator, with the views shifted up to make room) on iOS and Android.
+func _place_toolbar() -> void:
+	var ins := _insets()
+	if Layout.is_phone():
+		var bar_h := _phone_toolbar_height()
+		_content.offset_top = ins.y
+		_content.offset_bottom = -(bar_h + ins.w)
+		_toolbar_bar.anchor_left = 0.0
+		_toolbar_bar.anchor_right = 1.0
+		_toolbar_bar.anchor_top = 1.0
+		_toolbar_bar.anchor_bottom = 1.0
+		_toolbar_bar.offset_left = 0
+		_toolbar_bar.offset_right = 0
+		_toolbar_bar.offset_top = -(bar_h + ins.w)
+		_toolbar_bar.offset_bottom = 0
+		_toolbar_style.border_width_bottom = 0
+		_toolbar_style.border_width_top = 1
+		_toolbar_style.content_margin_bottom = 4 + ins.w   # the bar reaches the screen edge, behind the home indicator
+	else:
+		_toolbar_bar.anchor_left = 0.0
+		_toolbar_bar.anchor_right = 1.0
+		_toolbar_bar.anchor_top = 0.0
+		_toolbar_bar.anchor_bottom = 0.0
+		_toolbar_bar.offset_left = 0
+		_toolbar_bar.offset_right = 0
+		_toolbar_bar.offset_top = ins.y
+		_toolbar_bar.offset_bottom = ins.y + _toolbar_height()
+
 ## Recompute the positions that depend on the safe-area insets (after the phone is rotated).
 func _relayout() -> void:
 	if not Layout.is_phone():
 		return
 	var ins := _insets()
-	_content.offset_top = _toolbar_height() + ins.y
-	_toolbar_bar.offset_top = ins.y
-	_toolbar_bar.offset_bottom = ins.y + _toolbar_height()
+	_place_toolbar()
 	_fps_label.offset_right = -14 - ins.z
-	var bottom_gap := 12.0 * Layout.ui_scale() + ins.w
+	var bottom_gap := 12.0 * Layout.ui_scale()
 	_status.offset_bottom = -bottom_gap
 	_status.offset_top = -bottom_gap - (2.0 * Layout.font(22, 0.85) * 1.5 + 36.0)
 
@@ -574,6 +739,11 @@ func _process(delta: float) -> void:
 func _open_for_test(what: String) -> void:
 	match what:
 		"prefs": _action_preferences()
+		"prefsclose":
+			_action_preferences()
+			get_tree().create_timer(1.2).timeout.connect(func() -> void: PhoneSheet.dismiss(_prefs))
+		"home": _action_preferences(); (_prefs.find_children("*", "TabContainer", true, false)[0] as TabContainer).current_tab = 6
+		"grid": _action_preferences(); (_prefs.find_children("*", "TabContainer", true, false)[0] as TabContainer).current_tab = 3
 		"satellites": _popup(_satellites)
 		"map": _action_select_map()
 		"about": _action_about()
@@ -581,6 +751,14 @@ func _open_for_test(what: String) -> void:
 		"quakes": _action_quake_list()
 		"live": _action_live_status()
 		"debug": _popup(_debugger)
+		"toolbar": pass   # the native button bar is shown at start-up
 		"locations": _popup(_locations)
 		"regions": _popup(_regions)
 		"click": _on_location_clicked(35.0, -100.0)
+	if _native_snap != "" and NativeUI.is_open():
+		get_tree().create_timer(2.0).timeout.connect(func() -> void: NativeUI._call("debug_snapshot", _native_snap))
+		get_tree().create_timer(3.5).timeout.connect(get_tree().quit)
+	elif _native_snap != "" and _open_on_start == "toolbar":
+		# development: a picture of the native button bar
+		get_tree().create_timer(2.0).timeout.connect(func() -> void: NativeUI._call("debug_toolbar_snapshot", _native_snap))
+		get_tree().create_timer(3.5).timeout.connect(get_tree().quit)

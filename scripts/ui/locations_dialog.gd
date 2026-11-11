@@ -29,7 +29,7 @@ func _ready() -> void:
 	_tree.item_selected.connect(_on_selected)
 	vb.add_child(_tree)
 	var grid := GridContainer.new()
-	grid.columns = 4
+	grid.columns = 2 if Layout.is_phone() else 4
 	vb.add_child(grid)
 	_name = LineEdit.new()
 	_name.placeholder_text = "Name"
@@ -47,12 +47,12 @@ func _ready() -> void:
 		l.text = pair[0]
 		grid.add_child(l)
 		grid.add_child(pair[1])
-	var bar := HBoxContainer.new()
+	var bar := PhoneSheet.button_bar()
 	vb.add_child(bar)
 	_button(bar, "Add", _on_add)
 	_button(bar, "Update", _on_update)
 	_button(bar, "Delete", _on_delete)
-	_button(bar, "Use Last Clicked Location", func() -> void:
+	_button(bar, "Last Click" if Layout.is_phone() else "Use Last Clicked Location", func() -> void:
 		_lat.value = CityDB.last_clicked.x
 		_lon.value = CityDB.last_clicked.y)
 	_button(bar, "Use Home", func() -> void:
@@ -74,13 +74,14 @@ func _spin(lo: float, hi: float) -> SpinBox:
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return s
 
-func _button(bar: HBoxContainer, text: String, cb: Callable) -> void:
+func _button(bar: Container, text: String, cb: Callable) -> void:
 	var b := Button.new()
 	b.text = text
 	b.pressed.connect(cb)
 	bar.add_child(b)
 
 func populate() -> void:
+	NativeUI.refresh(self)
 	_tree.clear()
 	var root := _tree.create_item()
 	for i in range(CityDB.user_pois.size()):
@@ -124,3 +125,62 @@ func _on_delete() -> void:
 		CityDB.user_pois.remove_at(it.get_metadata(0))
 		CityDB.save_user_pois()
 		populate()
+
+# MARK: - Native (SwiftUI) version; see NativeUI
+# The native screen drives this dialog's own controls, so the list, the form and the saving stay in one place.
+
+func native_screen() -> Dictionary:
+	var selected := -1
+	if _tree.get_selected() != null:
+		selected = int(_tree.get_selected().get_metadata(0))
+	var items: Array = []
+	for i in range(CityDB.user_pois.size()):
+		var p: Dictionary = CityDB.user_pois[i]
+		items.append({"type": "row", "id": "loc:%d" % i, "leading": "●", "accent": str(p.get("Color", "#ee44cc")),
+			"title": str(p["Name"]), "subtitle": "%.4f, %.4f" % [p["Latitude"], p["Longitude"]], "selected": i == selected})
+	if CityDB.user_pois.is_empty():
+		items.append({"type": "paragraph", "title": "No locations yet. Fill in the details below and tap Add."})
+	items.append_array([{"type": "section", "title": "Details"},
+		{"type": "text", "key": "loc.name", "title": "Name"}, {"type": "text", "key": "loc.desc", "title": "Description"},
+		{"type": "number", "key": "loc.lat", "title": "Latitude", "min": -90, "max": 90, "step": 0.0001},
+		{"type": "number", "key": "loc.lon", "title": "Longitude", "min": -180, "max": 180, "step": 0.0001},
+		{"type": "color", "key": "loc.color", "title": "Color"},
+		{"type": "section", "title": "Actions"},
+		{"type": "action", "id": "add", "title": "Add", "style": "prominent"},
+		{"type": "action", "id": "update", "title": "Update Selected"},
+		{"type": "action", "id": "delete", "title": "Delete Selected", "style": "destructive"},
+		{"type": "action", "id": "last", "title": "Use Last Clicked Location"},
+		{"type": "action", "id": "home", "title": "Use Home"}])
+	return {"screen": {"title": "My Locations", "pages": [{"title": "Locations", "items": items}]},
+		"values": {"loc.name": _name.text, "loc.desc": _desc.text, "loc.lat": _lat.value, "loc.lon": _lon.value,
+			"loc.color": "#" + _color.color.to_html(false)}}
+
+func native_event(kind: String, key: String, value: Variant) -> void:
+	if kind == "value":
+		match key:
+			"loc.name": _name.text = str(value)
+			"loc.desc": _desc.text = str(value)
+			"loc.lat": _lat.value = float(value)
+			"loc.lon": _lon.value = float(value)
+			"loc.color": _color.color = Color(str(value))
+		return
+	if kind != "action":
+		return
+	if key.begins_with("loc:"):
+		var i := int(key.substr(4))
+		var root := _tree.get_root()
+		if root != null and i >= 0 and i < root.get_child_count():
+			root.get_child(i).select(0)
+			_on_selected()
+	else:
+		match key:
+			"add": _on_add()
+			"update": _on_update()
+			"delete": _on_delete()
+			"last":
+				_lat.value = CityDB.last_clicked.x
+				_lon.value = CityDB.last_clicked.y
+			"home":
+				_lat.value = Settings.get_float("home_latitude")
+				_lon.value = Settings.get_float("home_longitude")
+	NativeUI.refresh(self)

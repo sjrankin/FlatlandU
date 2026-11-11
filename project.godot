@@ -36,6 +36,7 @@ SatelliteService="*res://scripts/core/satellite_service.gd"
 window/size/viewport_width=1280
 window/size/viewport_height=800
 window/handheld/orientation=6
+window/ios/suppress_ui_gesture=false
 
 [rendering]
 

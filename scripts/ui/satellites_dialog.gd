@@ -79,6 +79,9 @@ func _on_item_edited() -> void:
 ## Update every row in place (the rows are never rebuilt, so a click is never lost): tracked satellites show
 ## their position now, and untracked ones are dimmed and show none.
 func _refresh_list() -> void:
+	if NativeUI.is_showing(self):
+		NativeUI.refresh(self)
+		return
 	if not visible:
 		return
 	_status.text = "Orbit data: " + SatelliteService.last_status
@@ -102,3 +105,37 @@ func _refresh_list() -> void:
 			item.set_text(3, "")
 			item.set_text(4, "")
 			item.set_text(5, "")
+
+# MARK: - Native (SwiftUI) version; see NativeUI
+
+func native_screen() -> Dictionary:
+	var live := {}
+	for s in SatelliteService.positions(Solar.now()):
+		live[int(s["id"])] = s
+	var items: Array = [{"type": "toggle", "key": "show_satellites", "title": "Show satellites on the globe and the maps"},
+		{"type": "section", "title": "Satellites (tick the ones to track)"}]
+	var values := {"show_satellites": Settings.get_bool("show_satellites")}
+	for entry in SatelliteService.CATALOG:
+		var id := int(entry[0])
+		var tracked := SatelliteService.is_tracked(id)
+		var detail := ""
+		if tracked and live.has(id):
+			var s: Dictionary = live[id]
+			detail = "%.1f°, %.1f°  %s" % [float(s["lat"]), float(s["lon"]), SatelliteService.format_altitude(float(s["alt_km"]))]
+		items.append({"type": "row", "id": "sat:%d" % id, "check_key": "sat.%d" % id, "title": str(entry[1]),
+			"subtitle": ("NORAD %d" % id) if id > 0 else "", "detail": detail, "dimmed": not tracked})
+		values["sat.%d" % id] = tracked
+	items.append({"type": "section", "title": "Orbit data"})
+	items.append({"type": "paragraph", "style": "caption", "title": SatelliteService.last_status})
+	items.append({"type": "action", "id": "refresh", "title": "Refresh Data", "style": "prominent"})
+	return {"screen": {"title": "Satellites", "pages": [{"title": "Satellites", "items": items}]}, "values": values}
+
+func native_event(kind: String, key: String, value: Variant) -> void:
+	if kind == "value":
+		if key == "show_satellites":
+			NativeUI.store_setting(key, value)
+		elif key.begins_with("sat."):
+			SatelliteService.set_tracked(int(key.substr(4)), bool(value))
+			NativeUI.refresh(self)
+	elif kind == "action" and key == "refresh":
+		SatelliteService.refresh()

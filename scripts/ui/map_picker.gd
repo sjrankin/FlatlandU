@@ -1,4 +1,4 @@
-extends HSplitContainer
+extends SplitContainer
 ## Map chooser (Flatland's map preference panel): grouped list of every map plus a preview.
 
 signal map_chosen(map_name: String)
@@ -9,10 +9,16 @@ var _caption: Label
 var _preview_file := ""
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(640, 380)
 	_tree = Tree.new()
 	_tree.hide_root = true
-	_tree.custom_minimum_size.x = 260
+	if Layout.is_phone():
+		# List above, preview below, instead of side by side.
+		vertical = true
+		custom_minimum_size = Vector2(0, 760.0 * Layout.ui_scale() * 0.6)
+		_tree.custom_minimum_size.y = 300.0 * Layout.ui_scale() * 0.6
+	else:
+		custom_minimum_size = Vector2(640, 380)
+		_tree.custom_minimum_size.x = 260
 	_tree.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(_tree)
 	var right := VBoxContainer.new()
@@ -21,10 +27,12 @@ func _ready() -> void:
 	_preview.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_preview.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_preview.custom_minimum_size = Vector2(320, 200)
+	_preview.custom_minimum_size = Vector2(0, 160) if Layout.is_phone() else Vector2(320, 200)
 	right.add_child(_preview)
 	_caption = Label.new()
 	_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if Layout.is_phone():
+		_caption.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY   # a long file name must not widen the page
 	right.add_child(_caption)
 	add_child(right)
 	var root := _tree.create_item()

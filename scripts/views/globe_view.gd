@@ -1598,7 +1598,7 @@ func handle_gui_input(event: InputEvent) -> void:
 		_mouse_pos = mm.position
 		if not _dragging:
 			_update_star_tooltip(mm.position)
-		if _dragging:
+		if _dragging and not _pinching:
 			if mm.meta_pressed or mm.alt_pressed or mm.ctrl_pressed:
 				# Command/Option/Ctrl-drag moves the globe across the view (SceneKit's camera pan).
 				var k := 2.0 * _distance * tan(deg_to_rad(_camera.fov) * 0.5) / maxf(1.0, get_viewport().get_visible_rect().size.y)
@@ -1617,6 +1617,20 @@ func handle_gui_input(event: InputEvent) -> void:
 		_yaw += pg.delta.x * 0.01
 		_pitch = clampf(_pitch + pg.delta.y * 0.01, -1.45, 1.45)
 		_apply_camera()
+
+## Two-finger pinch on a touch screen (driven by main.gd). While two fingers are down the
+## one-finger drag that Godot emulates from the first finger must not also spin the globe.
+var _pinching := false
+
+func set_pinching(on: bool) -> void:
+	_pinching = on
+
+## factor > 1 means the fingers moved apart (zoom in), like the trackpad magnify gesture.
+func pinch_zoom(factor: float) -> void:
+	if Settings.get_bool("world_locked"):
+		return
+	_distance = clampf(_distance / factor, MIN_DISTANCE, MAX_DISTANCE)
+	_apply_camera()
 
 ## Intersect a screen point with the globe and return {"hit": bool, "lat": f, "lon": f}.
 func pick(screen_pos: Vector2) -> Dictionary:

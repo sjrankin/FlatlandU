@@ -8,6 +8,12 @@ var _spins: Dictionary = {}
 var _enabled: CheckBox
 var _color: ColorPickerButton
 
+## Region fields: [key, label, minimum, maximum, default].
+const FIELDS := [["lat1", "Upper-left latitude", -90, 90, 60.0], ["lon1", "Upper-left longitude", -180, 180, -130.0],
+		["lat2", "Lower-right latitude", -90, 90, 20.0], ["lon2", "Lower-right longitude", -180, 180, -60.0],
+		["min_mag", "Minimum magnitude", 0, 10, 4.0], ["max_mag", "Maximum magnitude", 0, 10, 10.0],
+		["max_age_days", "Maximum age (days)", 0.1, 30, 7.0]]
+
 func _ready() -> void:
 	title = "Earthquake Regions"
 	size = Vector2i(760, 560)
@@ -36,12 +42,9 @@ func _ready() -> void:
 	_name.placeholder_text = "Region name"
 	vb.add_child(_name)
 	var grid := GridContainer.new()
-	grid.columns = 4
+	grid.columns = 2 if Layout.is_phone() else 4
 	vb.add_child(grid)
-	for f in [["lat1", "Upper-left latitude", -90, 90, 60.0], ["lon1", "Upper-left longitude", -180, 180, -130.0],
-			["lat2", "Lower-right latitude", -90, 90, 20.0], ["lon2", "Lower-right longitude", -180, 180, -60.0],
-			["min_mag", "Minimum magnitude", 0, 10, 4.0], ["max_mag", "Maximum magnitude", 0, 10, 10.0],
-			["max_age_days", "Maximum age (days)", 0.1, 30, 7.0]]:
+	for f in FIELDS:
 		var l := Label.new()
 		l.text = f[1]
 		grid.add_child(l)
@@ -59,7 +62,7 @@ func _ready() -> void:
 	_color = ColorPickerButton.new()
 	_color.color = Color("#ffcc00")
 	_color.custom_minimum_size = Vector2(70, 28)
-	var bar := HBoxContainer.new()
+	var bar := PhoneSheet.button_bar()
 	vb.add_child(bar)
 	bar.add_child(_enabled)
 	bar.add_child(_color)
@@ -77,6 +80,7 @@ func _ready() -> void:
 	populate()
 
 func populate() -> void:
+	NativeUI.refresh(self)
 	_tree.clear()
 	var root := _tree.create_item()
 	for i in range(CityDB.regions.size()):
@@ -125,3 +129,56 @@ func _on_delete() -> void:
 		CityDB.regions.remove_at(it.get_metadata(0))
 		CityDB.save_regions()
 		populate()
+
+# MARK: - Native (SwiftUI) version; see NativeUI
+# The native screen drives this dialog's own controls, so the list, the form and the saving stay in one place.
+
+func native_screen() -> Dictionary:
+	var selected := -1
+	if _tree.get_selected() != null:
+		selected = int(_tree.get_selected().get_metadata(0))
+	var items: Array = [{"type": "paragraph", "style": "caption", "title": "Regions are rectangles (upper-left to lower-right). With any region enabled, earthquakes are shown only inside regions, using each region's limits."}]
+	for i in range(CityDB.regions.size()):
+		var r: Dictionary = CityDB.regions[i]
+		items.append({"type": "row", "id": "reg:%d" % i, "leading": "▭", "accent": str(r.get("color", "#ffcc00")),
+			"title": str(r["name"]), "subtitle": "%.1f,%.1f to %.1f,%.1f · M%.1f–%.1f" % [r["lat1"], r["lon1"], r["lat2"], r["lon2"], r["min_mag"], r["max_mag"]],
+			"detail": "On" if r.get("enabled", true) else "Off", "selected": i == selected})
+	items.append_array([{"type": "section", "title": "Details"},
+		{"type": "text", "key": "reg.name", "title": "Region name"},
+		{"type": "toggle", "key": "reg.enabled", "title": "Enabled"},
+		{"type": "color", "key": "reg.color", "title": "Color"}])
+	var values := {"reg.name": _name.text, "reg.enabled": _enabled.button_pressed, "reg.color": "#" + _color.color.to_html(false)}
+	for f in FIELDS:
+		items.append({"type": "number", "key": "reg." + f[0], "title": f[1], "min": f[2], "max": f[3], "step": 0.1})
+		values["reg." + f[0]] = (_spins[f[0]] as SpinBox).value
+	items.append_array([{"type": "section", "title": "Actions"},
+		{"type": "action", "id": "add", "title": "Add", "style": "prominent"},
+		{"type": "action", "id": "update", "title": "Update Selected"},
+		{"type": "action", "id": "delete", "title": "Delete Selected", "style": "destructive"}])
+	return {"screen": {"title": "Earthquake Regions", "pages": [{"title": "Regions", "items": items}]}, "values": values}
+
+func native_event(kind: String, key: String, value: Variant) -> void:
+	if kind == "value":
+		if key == "reg.name":
+			_name.text = str(value)
+		elif key == "reg.enabled":
+			_enabled.button_pressed = bool(value)
+		elif key == "reg.color":
+			_color.color = Color(str(value))
+		elif key.begins_with("reg.") and _spins.has(key.substr(4)):
+			(_spins[key.substr(4)] as SpinBox).value = float(value)
+		return
+	if kind != "action":
+		return
+	if key.begins_with("reg:"):
+		var i := int(key.substr(4))
+		var root := _tree.get_root()
+		if root != null and i >= 0 and i < root.get_child_count():
+			root.get_child(i).select(0)
+			_on_selected()
+	else:
+		match key:
+			"add": _on_add()
+			"update": _on_update()
+			"delete": _on_delete()
+	NativeUI.refresh(self)

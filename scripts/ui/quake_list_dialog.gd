@@ -51,6 +51,7 @@ func _ready() -> void:
 	populate()
 
 func populate() -> void:
+	NativeUI.refresh(self)
 	_tree.clear()
 	var root := _tree.create_item()
 	var list := QuakeService.visible_quakes()
@@ -71,3 +72,34 @@ func _on_activated() -> void:
 	if it != null:
 		var q: Dictionary = it.get_metadata(0)
 		quake_chosen.emit(q["lat"], q["lon"])
+
+# MARK: - Native (SwiftUI) version; see NativeUI
+
+var _native_list: Array = []   # the quakes behind the rows currently shown, in order
+
+func native_screen() -> Dictionary:
+	_native_list = QuakeService.visible_quakes()
+	var items: Array = []
+	for i in range(_native_list.size()):
+		var q: Dictionary = _native_list[i]
+		var d := Time.get_datetime_dict_from_unix_time(int(q["time"]))
+		items.append({"type": "row", "id": "quake:%d" % i, "leading": "%.1f" % q["magnitude"],
+			"accent": "#" + QuakeService.magnitude_color(q["magnitude"]).to_html(false), "title": str(q["place"]),
+			"subtitle": "%04d-%02d-%02d %02d:%02d:%02d UTC · %s" % [d["year"], d["month"], d["day"], d["hour"], d["minute"], d["second"], Geo.pretty_coordinates(q["lat"], q["lon"], 2)],
+			"detail": "%.1f km" % q["depth"]})
+	items.append({"type": "section", "title": "Status"})
+	items.append({"type": "paragraph", "style": "caption", "title": "%d earthquakes shown (%d in feed). %s" % [_native_list.size(), QuakeService.quakes.size(), QuakeService.last_status]})
+	items.append({"type": "action", "id": "refresh", "title": "Refresh", "style": "prominent"})
+	return {"screen": {"title": "Earthquakes", "pages": [{"title": "Earthquakes", "items": items}]}, "values": {}}
+
+func native_event(kind: String, key: String, _value: Variant) -> void:
+	if kind != "action":
+		return
+	if key == "refresh":
+		QuakeService.refresh()
+	elif key.begins_with("quake:"):
+		var i := int(key.substr(6))
+		if i >= 0 and i < _native_list.size():
+			var q: Dictionary = _native_list[i]
+			quake_chosen.emit(q["lat"], q["lon"])
+			NativeUI.close()   # so the globe, now pointing at the quake, can be seen

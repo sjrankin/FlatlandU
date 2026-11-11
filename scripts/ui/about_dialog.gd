@@ -22,7 +22,7 @@ func _ready() -> void:
 	add_child(vb)
 	var svc := SubViewportContainer.new()
 	svc.stretch = true
-	svc.custom_minimum_size = Vector2(600, 280)
+	svc.custom_minimum_size = Vector2(0 if Layout.is_phone() else 600, 280)
 	svc.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var vp := SubViewport.new()
 	vp.own_world_3d = true
@@ -122,3 +122,32 @@ func _apply_map() -> void:
 func _process(delta: float) -> void:
 	if visible and _earth != null:
 		_earth.rotate_y(delta * 0.5)
+
+# MARK: - Native (SwiftUI) version; see NativeUI
+
+var _native_licenses := false
+
+func native_screen() -> Dictionary:
+	if _native_licenses:
+		return {"screen": {"title": "Licenses", "pages": [{"title": "Licenses", "items": [
+			{"type": "paragraph", "title": "Noto Sans", "style": "headline"},
+			{"type": "paragraph", "title": FileAccess.get_file_as_string("res://Assets/Fonts/NotoSans-OFL.txt"), "style": "mono"},
+			{"type": "action", "id": "about", "title": "Back to About"}]}]}, "values": {}}
+	var version := str(ProjectSettings.get_setting("application/config/version", "1.0"))
+	return {"screen": {"title": "About Flatland", "pages": [{"title": "About", "items": [
+		{"type": "paragraph", "title": "Flatland", "style": "title"},
+		{"type": "info", "title": "Version", "detail": version},
+		{"type": "info", "title": "Build", "detail": "%d, %s" % [BuildInfo.build_number(), BuildInfo.timestamp()]},
+		{"type": "info", "title": "Based on", "detail": "Godot port of FlatlandView"},
+		{"type": "section", "title": "Credits"},
+		{"type": "paragraph", "title": "Flatland was written by Stuart Rankin with design inspiration and assistance from Kees de Kok.\n© 2019 – 2026 Stuart Rankin"},
+		{"type": "paragraph", "title": "All images and sounds used in Flatland are, to the best of the author's knowledge, in the public domain."},
+		{"type": "paragraph", "title": "3D text uses Noto Sans, licensed under the SIL Open Font License 1.1.", "style": "caption"},
+		{"type": "action", "id": "licenses", "title": "Show Licenses"}]}]}, "values": {}}
+
+func native_event(kind: String, key: String, _value: Variant) -> void:
+	if kind == "action":
+		_native_licenses = key == "licenses"
+		NativeUI.refresh(self)
+	elif kind == "closed":
+		_native_licenses = false

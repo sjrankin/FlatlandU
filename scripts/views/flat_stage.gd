@@ -248,7 +248,7 @@ func _gui_input(event: InputEvent) -> void:
 				_apply_camera()
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
-		if _dragging:
+		if _dragging and not _pinching:
 			_yaw -= mm.relative.x * 0.006
 			_pitch = clampf(_pitch + mm.relative.y * 0.006, MIN_PITCH, MAX_PITCH)
 			_apply_camera()
@@ -258,6 +258,18 @@ func _gui_input(event: InputEvent) -> void:
 	elif event is InputEventMagnifyGesture:
 		_zoom = clampf(_zoom / (event as InputEventMagnifyGesture).factor, 0.3, 2.5)
 		_apply_camera()
+
+## Two-finger pinch on a touch screen (driven by main.gd); see GlobeView.pinch_zoom.
+var _pinching := false
+
+func set_pinching(on: bool) -> void:
+	_pinching = on
+
+func pinch_zoom(factor: float) -> void:
+	if Settings.get_bool("world_locked"):
+		return
+	_zoom = clampf(_zoom / factor, 0.3, 2.5)
+	_apply_camera()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_MOUSE_EXIT:

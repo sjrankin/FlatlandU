@@ -33,23 +33,46 @@ func _ready() -> void:
 	about_to_popup.connect(update_rows)
 	update_rows()
 
-func update_rows() -> void:
-	for c in _grid.get_children():
-		c.queue_free()
+## The label/value pairs shown (the same for the Godot and the native screen).
+func _rows() -> Array:
 	var last := "never"
 	if QuakeService.last_fetch_unix > 0.0:
 		var d := Time.get_datetime_dict_from_unix_time(int(QuakeService.last_fetch_unix))
 		last = "%04d-%02d-%02d %02d:%02d:%02d UTC" % [d["year"], d["month"], d["day"], d["hour"], d["minute"], d["second"]]
-	for row in [["Source", "USGS earthquake feed"], ["URL", QuakeService.FEED_URL],
+	return [["Source", "USGS earthquake feed"], ["URL", QuakeService.FEED_URL],
 			["Enabled", "yes" if Settings.get_bool("enable_earthquakes") else "no"],
 			["Fetch interval", "%d s" % int(Settings.get_float("quake_fetch_interval"))],
 			["Last retrieved", last], ["Status", QuakeService.last_status],
 			["Earthquakes in feed", str(QuakeService.quakes.size())],
-			["Earthquakes displayed", str(QuakeService.visible_quakes().size())]]:
+			["Earthquakes displayed", str(QuakeService.visible_quakes().size())]]
+
+func update_rows() -> void:
+	NativeUI.refresh(self)
+	for c in _grid.get_children():
+		c.queue_free()
+	for row in _rows():
 		var a := Label.new()
 		a.text = row[0]
 		a.add_theme_color_override("font_color", Color("#8fb8ff"))
 		var b := Label.new()
 		b.text = row[1]
+		if Layout.is_phone():
+			# Long values (URLs, status text) wrap in the space beside the heading.
+			b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			b.custom_minimum_size.x = 120
 		_grid.add_child(a)
 		_grid.add_child(b)
+
+# MARK: - Native (SwiftUI) version; see NativeUI
+
+func native_screen() -> Dictionary:
+	var items: Array = []
+	for row in _rows():
+		items.append({"type": "info", "title": row[0], "detail": row[1]})
+	items.append({"type": "action", "id": "refresh", "title": "Refresh Now", "style": "prominent"})
+	return {"screen": {"title": "Live Data Status", "pages": [{"title": "Live Data", "items": items}]}, "values": {}}
+
+func native_event(kind: String, key: String, _value: Variant) -> void:
+	if kind == "action" and key == "refresh":
+		QuakeService.refresh()

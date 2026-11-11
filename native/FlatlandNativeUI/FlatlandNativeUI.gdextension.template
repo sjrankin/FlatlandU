@@ -1,0 +1,11 @@
+; Copy this file to res://addons/FlatlandNativeUI/FlatlandNativeUI.gdextension (dropping ".template")
+; once the libraries below have been built into res://addons/FlatlandNativeUI/bin/ (see README.md).
+; Until then keep it out of the project: Godot reports an error for an extension whose library is missing.
+
+[configuration]
+entry_symbol = "flatland_native_ui_entry"
+compatibility_minimum = 4.4
+
+[libraries]
+macos = "res://addons/FlatlandNativeUI/bin/libFlatlandNativeUI.dylib"
+ios = "res://addons/FlatlandNativeUI/bin/FlatlandNativeUI.xcframework"

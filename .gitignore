@@ -3,3 +3,6 @@
 ExternalData/
 FlatlandU Icons/
 /Maps/
+native/FlatlandNativeUI/.build/
+native/FlatlandNativeUI/build/
+native/FlatlandNativeUI/.swiftpm/

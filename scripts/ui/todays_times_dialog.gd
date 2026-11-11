@@ -18,6 +18,8 @@ func _ready() -> void:
 	vb.add_theme_constant_override("separation", 10)
 	root.add_child(vb)
 	_city_opt = OptionButton.new()
+	_city_opt.clip_text = true
+	_city_opt.fit_to_longest_item = false   # the longest city name must not set the dialog's minimum width
 	_city_opt.add_item("Home: " + Settings.get_string("home_name"), 0)
 	_cities = CityDB.cities.duplicate()
 	_cities.sort_custom(func(a, b): return str(a["Name"]) < str(b["Name"]))
@@ -42,9 +44,7 @@ func _fmt(unix: float, tz_hours: float) -> String:
 	var d := Time.get_time_dict_from_unix_time(int(unix + tz_hours * 3600.0))
 	return "%02d:%02d" % [d["hour"], d["minute"]]
 
-func update_times() -> void:
-	for c in _grid.get_children():
-		c.queue_free()
+func _rows() -> Array:
 	var lat := Settings.get_float("home_latitude")
 	var lon := Settings.get_float("home_longitude")
 	var sel := _city_opt.get_selected_id()
@@ -66,11 +66,41 @@ func update_times() -> void:
 	else:
 		rows.append(["Sun", "Sun is up all day" if r["status"] == "polar_day" else "Sun does not rise today"])
 	rows.append(["Sun now", "Above the horizon" if Solar.is_daylight(lat, lon, now) else "Below the horizon"])
+	return rows
+
+func update_times() -> void:
+	NativeUI.refresh(self)
+	for c in _grid.get_children():
+		c.queue_free()
+	var rows := _rows()
 	for row in rows:
 		var a := Label.new()
 		a.text = row[0]
 		a.add_theme_color_override("font_color", Color("#8fb8ff"))
 		var b := Label.new()
 		b.text = row[1]
+		if Layout.is_phone():
+			# Long values (URLs, status text) wrap in the space beside the heading.
+			b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			b.custom_minimum_size.x = 120
 		_grid.add_child(a)
 		_grid.add_child(b)
+
+# MARK: - Native (SwiftUI) version; see NativeUI
+
+func native_screen() -> Dictionary:
+	var options: Array = []
+	for i in range(_city_opt.item_count):
+		options.append({"label": _city_opt.get_item_text(i), "value": _city_opt.get_item_id(i)})
+	var items: Array = [{"type": "choice", "key": "city", "title": "City", "options": options},
+		{"type": "section", "title": "Today"}]
+	for row in _rows():
+		items.append({"type": "info", "title": row[0], "detail": row[1]})
+	return {"screen": {"title": "Today's Times", "pages": [{"title": "Times", "items": items}]},
+		"values": {"city": _city_opt.get_selected_id()}}
+
+func native_event(kind: String, key: String, value: Variant) -> void:
+	if kind == "value" and key == "city":
+		_city_opt.select(_city_opt.get_item_index(int(value)))
+		update_times()

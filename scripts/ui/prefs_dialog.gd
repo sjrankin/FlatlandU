@@ -17,9 +17,12 @@ func _ready() -> void:
 	add_child(root)
 	var vb := VBoxContainer.new()
 	root.add_child(vb)
+	var phone := Layout.is_phone()
+	if phone:
+		set_meta("sheet_no_scroll", true)   # every page scrolls by itself (see PhoneSheet.wrap)
 	var tabs := TabContainer.new()
 	tabs.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vb.add_child(tabs)
+	SettingControls.begin_recording()   # NativeUI builds its Preferences from what is recorded here
 	_general(tabs)
 	_map(tabs)
 	_cities(tabs)
@@ -27,17 +30,52 @@ func _ready() -> void:
 	_quakes(tabs)
 	_colors(tabs)
 	_location(tabs)
-	var bar := HBoxContainer.new()
-	bar.alignment = BoxContainer.ALIGNMENT_END
+	SettingControls.end_recording()
 	var reset := Button.new()
 	reset.text = "Reset All Settings"
 	reset.pressed.connect(func() -> void: Settings.reset_all())
-	bar.add_child(reset)
-	var close := Button.new()
-	close.text = "Close"
-	close.pressed.connect(hide)
-	bar.add_child(close)
-	vb.add_child(bar)
+	if phone:
+		# The sections are a row of buttons with separators (seven tabs do not fit a phone's width).
+		tabs.tabs_visible = false
+		vb.add_child(_section_buttons(tabs))
+		vb.add_child(tabs)
+		# PhoneSheet.wrap moves this bottom row to the footer, left of the Close button.
+		var bar := HBoxContainer.new()
+		bar.add_child(reset)
+		vb.add_child(bar)
+	else:
+		vb.add_child(tabs)
+		var bar := HBoxContainer.new()
+		bar.alignment = BoxContainer.ALIGNMENT_END
+		bar.add_child(reset)
+		var close := Button.new()
+		close.text = "Close"
+		close.pressed.connect(hide)
+		bar.add_child(close)
+		vb.add_child(bar)
+
+## Phone only: one rounded button per section with a thin divider between neighbours; the current
+## section is highlighted. Wraps onto a second line when the buttons do not fit one.
+func _section_buttons(tabs: TabContainer) -> Control:
+	var flow := HFlowContainer.new()
+	var group := ButtonGroup.new()
+	var buttons: Array[Button] = []
+	for i in range(tabs.get_tab_count()):
+		if i > 0:
+			var sep := VSeparator.new()
+			flow.add_child(sep)
+		var b := Button.new()
+		b.text = tabs.get_tab_title(i)
+		b.toggle_mode = true
+		b.button_group = group
+		b.button_pressed = i == tabs.current_tab
+		b.pressed.connect(func() -> void: tabs.current_tab = i)
+		flow.add_child(b)
+		buttons.append(b)
+	tabs.tab_changed.connect(func(i: int) -> void:   # e.g. opened on the Map page from elsewhere
+		for k in range(buttons.size()):
+			buttons[k].set_pressed_no_signal(k == i))
+	return flow
 
 func _general(tabs: TabContainer) -> void:
 	var p := SettingControls.page(tabs, "General")
@@ -67,6 +105,12 @@ func _general(tabs: TabContainer) -> void:
 	p.add_child(SettingControls.check("Enable sounds", "enable_sounds"))
 
 func _map(tabs: TabContainer) -> void:
+	SettingControls.record_page("Map")
+	var map_options: Array = []
+	for m in MapCatalog.maps:
+		map_options.append({"label": str(m["name"]), "value": str(m["name"]), "group": MapCatalog.group_for(m)})
+	SettingControls.record_item({"type": "choice", "key": "map_type", "title": "Map", "options": map_options})
+	SettingControls.record_item({"type": "action", "id": "satellites", "title": "Satellites…"})
 	var picker: Control = load("res://scripts/ui/map_picker.gd").new()
 	picker.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var box := VBoxContainer.new()
@@ -78,6 +122,15 @@ func _map(tabs: TabContainer) -> void:
 	sats.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	sats.pressed.connect(func() -> void: open_satellites.emit())
 	box.add_child(sats)
+	if Layout.is_phone():
+		var scroll := ScrollContainer.new()
+		scroll.name = "Map"
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		box.name = "MapBox"
+		box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scroll.add_child(box)
+		tabs.add_child(scroll)
+		return
 	tabs.add_child(box)
 
 func _cities(tabs: TabContainer) -> void:
@@ -130,7 +183,7 @@ func _quakes(tabs: TabContainer) -> void:
 		["Fiddle", "Fiddle.mp3"], ["Gong", "Gong.mp3"], ["Pips", "gts_pips.mp3"]]))
 
 func _colors(tabs: TabContainer) -> void:
-	var p := SettingControls.page(tabs, "Colors and Fonts")
+	var p := SettingControls.page(tabs, "Colors" if Layout.is_phone() else "Colors and Fonts")
 	p.add_child(SettingControls.section("Fonts"))
 	p.add_child(SettingControls.font_picker("Label font (hours, cities, locations)", "label_font"))
 	p.add_child(SettingControls.section("General"))
@@ -150,14 +203,12 @@ func _colors(tabs: TabContainer) -> void:
 func _location(tabs: TabContainer) -> void:
 	var p := SettingControls.page(tabs, "Home")
 	p.add_child(Label.new())
+	(p.get_child(0) as Label).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	(p.get_child(0) as Label).text = "Home location is used for \"relative to home location\" hours and Today's Times."
 	p.add_child(SettingControls.spin("Latitude", "home_latitude", -90, 90, 0.0001))
 	p.add_child(SettingControls.spin("Longitude", "home_longitude", -180, 180, 0.0001))
-	var row := HBoxContainer.new()
-	var lbl := Label.new()
-	lbl.text = "Name"
-	lbl.custom_minimum_size.x = 150
-	row.add_child(lbl)
+	SettingControls.record_item({"type": "text", "key": "home_name", "title": "Name"})
+	var row := SettingControls.labeled_row("Name", 150)
 	var le := LineEdit.new()
 	le.text = Settings.get_string("home_name")
 	le.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -165,3 +216,28 @@ func _location(tabs: TabContainer) -> void:
 	le.focus_exited.connect(func() -> void: Settings.set_value("home_name", le.text))
 	row.add_child(le)
 	p.add_child(row)
+
+# MARK: - Native (SwiftUI) version; see NativeUI
+
+func native_screen() -> Dictionary:
+	var pages: Array = SettingControls.recorded_pages.duplicate(true)
+	for page in pages:
+		if page["title"] == "Colors":
+			page["title"] = "Colors and Fonts"
+	var values := {}
+	for page in pages:
+		for item in page["items"]:
+			if item.has("key"):
+				values[item["key"]] = Settings.get_value(item["key"])
+	return {"screen": {"title": "Flatland Preferences", "pages": pages, "root_items": [
+		{"type": "action", "id": "reset", "title": "Reset All Settings", "style": "destructive",
+			"confirm": "Reset every setting to its default?"}]}, "values": values}
+
+func native_event(kind: String, key: String, value: Variant) -> void:
+	if kind == "value":
+		NativeUI.store_setting(key, value)
+	elif kind == "action":
+		if key == "reset":
+			Settings.reset_all()
+		elif key == "satellites":
+			open_satellites.emit()
