@@ -1,7 +1,8 @@
-shader_type canvas_item;
-
 // Night overlay for the flat views. Reproduces Flatland's pre-rendered day/night masks
 // analytically: mode 0 = north-centered polar, 1 = south-centered polar, 2 = rectangular.
+
+shader_type canvas_item;
+
 uniform int mode = 0;
 uniform float sun_declination = 0.0;   // radians
 uniform float sun_longitude = 0.0;     // degrees (sub-solar longitude)

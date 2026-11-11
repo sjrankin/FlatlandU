@@ -8,7 +8,7 @@ var _licenses_button: Button
 
 func _ready() -> void:
 	title = "About Flatland"
-	size = Vector2i(620, 720)
+	size = Vector2i(620, 790)
 	exclusive = false
 	transient = true
 	close_requested.connect(hide)
@@ -39,7 +39,7 @@ func _ready() -> void:
 	var info := Label.new()
 	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	info.text = "Version %s\nGodot port of FlatlandView\n\nFlatland was written by Stuart Rankin with design inspiration\nand assistance from Kees de Kok.\n© 2019 – 2026 Stuart Rankin\n\nAll images and sounds used in Flatland are, to the best of the\nauthor's knowledge, in the public domain." % ProjectSettings.get_setting("application/config/version", "1.0")
+	info.text = "Version %s\nBuild %d, %s\nGodot port of FlatlandView\n\nFlatland was written by Stuart Rankin with design inspiration\nand assistance from Kees de Kok.\n© 2019 – 2026 Stuart Rankin\n\nAll images and sounds used in Flatland are, to the best of the\nauthor's knowledge, in the public domain." % [ProjectSettings.get_setting("application/config/version", "1.0"), BuildInfo.build_number(), BuildInfo.timestamp()]
 	vb.add_child(info)
 	var credit := Label.new()
 	credit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

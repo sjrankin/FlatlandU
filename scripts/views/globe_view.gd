@@ -12,6 +12,11 @@ const R := Geo.GLOBE_RADIUS
 const DEFAULT_DISTANCE := 175.0
 const MIN_DISTANCE := 20.0
 const MAX_DISTANCE := 500.0
+# Hour labels are fully opaque at and beyond FADE_START_DISTANCE and fade smoothly to
+# HOUR_MIN_ALPHA as the camera zooms in to FADE_END_DISTANCE, so they don't block the surface.
+const HOUR_FADE_START_DISTANCE := 110.0
+const HOUR_FADE_END_DISTANCE := 45.0
+const HOUR_MIN_ALPHA := 0.3
 const CAMERA_FOV := 9.0
 
 var _system: Node3D                # tilted by the sun's declination
@@ -55,6 +60,7 @@ var _yaw := 0.0
 var _pan := Vector2.ZERO            # screen-plane offset of the camera (command/option-drag)
 var _pitch := 0.0
 var _distance := DEFAULT_DISTANCE
+var _hour_alpha := 1.0              # current opacity of the hour labels (depends on zoom)
 var _dragging := false
 var _intro: IntroText
 const EARTH_SHADOW_LAYER := 1 << 19
@@ -982,11 +988,43 @@ func _hour_mesh(text: String, size: float, radius: float = 11.5) -> MeshInstance
 	mi.mesh = Shapes.bend_text(tm, radius)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Settings.get_color("color_hours")
-	mat.roughness = 0.55
+	# Glossy: a polished body under a clear coat. The sun (fixed behind the camera) must be what
+	# lights and highlights the labels, so metallic stays low; a high value would make the fixed
+	# studio sky in the environment dominate, which lit the labels from the side instead.
+	mat.metallic = 0.2
+	mat.metallic_specular = 0.8
+	mat.roughness = 0.18
+	mat.clearcoat_enabled = true
+	mat.clearcoat = 1.0
+	mat.clearcoat_roughness = 0.05
 	mat.emission_enabled = true
-	mat.emission = Settings.get_color("color_hours") * 0.25
+	mat.emission = Settings.get_color("color_hours") * 0.08
+	_apply_alpha_to_hour_material(mat, _hour_alpha)
 	mi.material_override = mat
 	return mi
+
+## Opacity for the hour labels at the current zoom: 1.0 when far, HOUR_MIN_ALPHA when close.
+func _hour_alpha_for_distance(distance: float) -> float:
+	var t := smoothstep(HOUR_FADE_END_DISTANCE, HOUR_FADE_START_DISTANCE, distance)
+	return lerpf(HOUR_MIN_ALPHA, 1.0, t)
+
+## Alpha blending is only switched on while a label is actually see-through, so fully opaque
+## labels keep the cheaper opaque rendering and sorting.
+func _apply_alpha_to_hour_material(mat: StandardMaterial3D, alpha: float) -> void:
+	var c := mat.albedo_color
+	c.a = alpha
+	mat.albedo_color = c
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA if alpha < 0.999 else BaseMaterial3D.TRANSPARENCY_DISABLED
+
+func _update_hour_alpha() -> void:
+	var a := _hour_alpha_for_distance(_distance)
+	if is_equal_approx(a, _hour_alpha) or _hours_earth == null or _hours_fixed == null:
+		return
+	_hour_alpha = a
+	for parent in [_hours_earth, _hours_fixed]:
+		for mi in parent.get_children():
+			if mi is MeshInstance3D and mi.material_override is StandardMaterial3D:
+				_apply_alpha_to_hour_material(mi.material_override, a)
 
 func _rebuild_hours() -> void:
 	_clear(_hours_earth)
@@ -1421,6 +1459,7 @@ func _apply_camera() -> void:
 	_camera.near = maxf(0.1, cam_z - 40.0 - extra)
 	_camera.far = cam_z + 40.0 + extra
 	_sun.directional_shadow_max_distance = cam_z + 40.0
+	_update_hour_alpha()
 	if _sky_mesh != null:
 		# Just inside the far plane, beyond everything in the scene.
 		var r := _camera.far - 2.0

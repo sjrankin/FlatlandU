@@ -1,8 +1,9 @@
+// The sky sphere, centred on the camera. It is black except for the sun, drawn as a bright
+// yellow-orange sphere in its true direction (+Z: the scene is lit from behind the default view).
+
 shader_type spatial;
 render_mode unshaded, cull_front, shadows_disabled, fog_disabled;
 
-// The sky sphere, centred on the camera. It is black except for the sun, drawn as a bright
-// yellow-orange sphere in its true direction (+Z: the scene is lit from behind the default view).
 uniform bool use_sun = true;
 uniform float sun_radius_deg = 0.4;
 uniform float sun_brightness = 2.1;

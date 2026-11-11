@@ -76,6 +76,7 @@ const DEFAULTS := {
 	"show_shadows_3d": true,
 	"show_regions": true,
 	"label_font": "",
+	"snapshot_dir": "",   # folder of the last saved snapshot; the Save dialog opens here
 	"color_grid": "#808080",
 	"color_hours": "#b5381a",
 	"color_hours_2d": "#f4a460",

@@ -13,7 +13,6 @@ const TEXT_SCALE := 1.15
 ## Three full turns, plus the quarter turn from the starting limb to face the viewer.
 const TOTAL_TRAVEL := TAU * ROTATIONS + PI / 2.0
 const RING_RADIUS := 14.5   # well outside the hour labels (radius 11.5)
-const BUILD_DATE := "10 November 2026"
 
 var _lines: Array = []   # {y, half_angle, half_height} for each line, used by occludes()
 ## When false (shown from the Welcome button) the text stays, facing the viewer, until it is dismissed.
@@ -30,7 +29,7 @@ func _ready() -> void:
 	var version := str(ProjectSettings.get_setting("application/config/version", "1.0"))
 	var lines: Array = [
 		["FLATLAND", Color("#e03030"), 1.5, 2.6, true],
-		["Version %s (%s)" % [version, BUILD_DATE], Color("#f2c000"), 1.0, 0.0, false],
+		["Version %s, Build %d, %s" % [version, BuildInfo.build_number(), BuildInfo.short_date()], Color("#f2c000"), 1.0, 0.0, false],
 		["Copyright © 2019 - 2026 Stuart Rankin", Color("#18b8d0"), 1.0, -2.6, false],
 	]
 	for line in lines:

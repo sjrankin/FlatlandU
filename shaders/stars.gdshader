@@ -1,9 +1,10 @@
-shader_type spatial;
-render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled, fog_disabled;
-
 // Stars as small round points on the sky sphere. Each star is a quad built from its direction
 // (VERTEX, a unit vector in the star frame); UV is the corner (-1..1) and COLOR carries the star's
 // colour (rgb) and UV2.x the size in pixels (vertex colours are 8-bit, so they cannot carry it).
+
+shader_type spatial;
+render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabled, fog_disabled;
+
 uniform float pixel_angle = 0.0002;   // radians per screen pixel
 uniform float sky_radius = 200.0;
 

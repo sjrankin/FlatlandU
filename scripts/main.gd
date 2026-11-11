@@ -47,6 +47,7 @@ var _satellites: Window
 var _debugger: Window
 var _bg: ColorRect
 var _snapshot_dialog: FileDialog
+var _snapshot_image: Image          # captured when the Snapshot button is pressed, saved when the dialog is confirmed
 var _whats_here: PopupPanel
 var _whats_here_label: RichTextLabel
 var _start_msec := Time.get_ticks_msec()
@@ -406,19 +407,26 @@ func _action_reset_view() -> void:
 		_globe.reset_view()
 
 func _action_snapshot() -> void:
+	# Grab the picture now, before the dialog opens, so the snapshot shows the view at the moment
+	# of the button press rather than whenever the file is saved (or with the dialog on top).
+	_snapshot_image = get_viewport().get_texture().get_image()
 	var d := Time.get_datetime_dict_from_system()
 	_snapshot_dialog.current_file = "Flatland Snapshot %04d-%02d-%02d %02d.%02d.%02d.png" % [d["year"], d["month"], d["day"], d["hour"], d["minute"], d["second"]]
-	var docs := OS.get_system_dir(OS.SYSTEM_DIR_PICTURES)
-	if docs != "":
-		_snapshot_dialog.current_dir = docs
+	# Open where the last snapshot was saved; the first time (or if that folder is gone), use Pictures.
+	var start_dir := Settings.get_string("snapshot_dir")
+	if start_dir == "" or not DirAccess.dir_exists_absolute(start_dir):
+		start_dir = OS.get_system_dir(OS.SYSTEM_DIR_PICTURES)
+	if start_dir != "":
+		_snapshot_dialog.current_dir = start_dir
 	_snapshot_dialog.popup_centered_ratio(0.6)
 
 func _save_snapshot(path: String) -> void:
-	var img := get_viewport().get_texture().get_image()
-	if img.save_png(path) == OK:
+	if _snapshot_image != null and _snapshot_image.save_png(path) == OK:
+		Settings.set_value("snapshot_dir", path.get_base_dir())
 		_status.post("Snapshot saved to " + path, 5.0)
 	else:
 		_status.post("Could not save the snapshot.", 5.0)
+	_snapshot_image = null
 
 # MARK: - Events
 
@@ -528,8 +536,8 @@ func _update_debug_grid() -> void:
 		return
 	var up := (Time.get_ticks_msec() - _start_msec) / 1000
 	_debug_values["Version"].text = "v" + APP_VERSION
-	_debug_values["Build"].text = Engine.get_version_info()["string"]
-	_debug_values["Build date"].text = "9 November 2026"
+	_debug_values["Build"].text = "%d (Godot %s)" % [BuildInfo.build_number(), Engine.get_version_info()["string"]]
+	_debug_values["Build date"].text = BuildInfo.timestamp()
 	_debug_values["Uptime"].text = "%d:%02d:%02d" % [up / 3600, (up % 3600) / 60, up % 60]
 	_debug_values["Memory Used"].text = "%.2f GB" % (OS.get_static_memory_usage() / 1073741824.0)
 

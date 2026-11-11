@@ -10,7 +10,7 @@ var _pushed_until_msec := 0
 
 func _ready() -> void:
 	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(0, 0, 0, 0.55)
+	sb.bg_color = Color(0, 0, 0, 0.7)
 	sb.border_color = Color("#1f3a7a")
 	sb.set_border_width_all(3)
 	sb.set_corner_radius_all(6)
