@@ -425,7 +425,7 @@ func _update_hours() -> void:
 			var size_units: float = float(s["size"]) * _unit()
 			var tm := TextMesh.new()
 			tm.text = str(s["text"])
-			tm.font = Geo.label_font(700)
+			tm.font = Geo.heavy_font()
 			tm.font_size = 64
 			tm.pixel_size = size_units / 64.0
 			tm.depth = size_units * 0.4

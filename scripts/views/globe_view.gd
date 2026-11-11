@@ -20,6 +20,7 @@ var _earth_mesh: MeshInstance3D
 var _earth_mat: ShaderMaterial
 var _sea_mesh: MeshInstance3D
 var _sea_mat: ShaderMaterial
+var _cube_mats: Array[ShaderMaterial] = []
 var _sea_file := ""
 var _fixed: Node3D                  # stays with the sun (poles, noon meridians, solar hours)
 var _orbit: Node3D                  # camera pivot
@@ -253,8 +254,6 @@ func _build_poles() -> void:
 	gold.metallic = 1.0
 	gold.metallic_specular = 1.0
 	gold.roughness = 0.45
-	gold.emission_enabled = true
-	gold.emission = Color("#4a3400")
 	_poles = Node3D.new()
 	_poles.name = "Poles"
 	_fixed.add_child(_poles)
@@ -870,26 +869,30 @@ func _build_cube() -> void:
 	_cube.name = "Cube"
 	_cube.visible = false
 	_earth.add_child(_cube)
+	# Faces sit where the globe's longitudes put them: +Z is lon 0 (Africa), +X is 90E (Asia),
+	# -Z is 180 (Pacific) and -X is 90W (the Americas). The pole faces are turned to match.
+	var yaw := Basis(Vector3.UP, deg_to_rad(90.0))
 	var faces := [
-		["nx", Vector3(0, 0, 5), Vector3(0, 0, 0)],
-		["pz", Vector3(5, 0, 0), Vector3(0, 90, 0)],
-		["px", Vector3(0, 0, -5), Vector3(0, 180, 0)],
-		["nz", Vector3(-5, 0, 0), Vector3(0, -90, 0)],
-		["py-90", Vector3(0, 5, 0), Vector3(-90, 0, 0)],
-		["ny90", Vector3(0, -5, 0), Vector3(90, 0, 0)],
+		["nz", Vector3(0, 0, 5), Basis()],
+		["nx", Vector3(5, 0, 0), Basis(Vector3.UP, deg_to_rad(90.0))],
+		["pz", Vector3(0, 0, -5), Basis(Vector3.UP, deg_to_rad(180.0))],
+		["px", Vector3(-5, 0, 0), Basis(Vector3.UP, deg_to_rad(-90.0))],
+		["py-90", Vector3(0, 5, 0), yaw * Basis.from_euler(Vector3(deg_to_rad(-90.0), 0, 0))],
+		["ny90", Vector3(0, -5, 0), yaw * Basis.from_euler(Vector3(deg_to_rad(90.0), 0, 0))],
 	]
 	for f in faces:
 		var quad := MeshInstance3D.new()
 		var qm := QuadMesh.new()
 		qm.size = Vector2(10, 10)
 		quad.mesh = qm
-		var mat := StandardMaterial3D.new()
-		mat.albedo_texture = load("res://Assets/Cubic/%s.png" % f[0])
-		mat.roughness = 0.8
-		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+		var mat := ShaderMaterial.new()
+		mat.shader = load("res://shaders/cube.gdshader")
+		mat.set_shader_parameter("albedo_tex", load("res://Assets/Cubic/%s.png" % f[0]))
+		mat.set_shader_parameter("use_tex", true)
+		_cube_mats.append(mat)
 		quad.material_override = mat
 		quad.position = f[1]
-		quad.rotation_degrees = f[2]
+		quad.basis = f[2]
 		_cube.add_child(quad)
 
 func set_cubic(on: bool) -> void:
@@ -970,7 +973,7 @@ func _rebuild_grid() -> void:
 func _hour_mesh(text: String, size: float, radius: float = 11.5) -> MeshInstance3D:
 	var tm := TextMesh.new()
 	tm.text = text
-	tm.font = Geo.label_font()
+	tm.font = Geo.heavy_font()
 	tm.font_size = 96
 	tm.pixel_size = 0.0125 * size
 	tm.depth = 0.35 * size
@@ -1355,7 +1358,9 @@ func _update_time(snap: bool) -> void:
 		_place_stars()
 	_system.rotation.x = decl          # tilt the Earth; the sun stays fixed behind the camera
 	var sun_dir := Vector3(0, 0, 1)
-	for mat in [_earth_mat, _sea_mat]:
+	var lit_mats: Array[ShaderMaterial] = [_earth_mat, _sea_mat]
+	lit_mats.append_array(_cube_mats)
+	for mat in lit_mats:
 		mat.set_shader_parameter("sun_dir", sun_dir)
 		mat.set_shader_parameter("night_level", 0.14 if Settings.get_bool("show_moon_light") else 0.04)
 	_sun.position = sun_dir * 100.0

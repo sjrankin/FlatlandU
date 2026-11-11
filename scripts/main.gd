@@ -1,16 +1,10 @@
 extends Control
 ## Main window: the counterpart of Flatland's MainController. Hosts the 3D globe and the flat
-## view, the time label, toolbar, menu bar, status bar and all dialogs. All UI is Godot UI.
+## view, the time label, toolbar, status bar and all dialogs. All UI is Godot UI.
 
 const ICON_DIR := "res://Assets/Icons/"
 const APP_VERSION := "1.0 (Godot)"
 const TOOLBAR_HEIGHT := 60
-
-## Height taken by an in-window menu bar (zero on macOS, which uses the native menu bar).
-func _menu_height() -> int:
-	if Layout.is_ios() or DisplayServer.has_feature(DisplayServer.FEATURE_GLOBAL_MENU):
-		return 0
-	return int(28 * Layout.ui_scale())
 
 ## Height of the toolbar (scaled up on phones).
 func _toolbar_height() -> int:
@@ -38,7 +32,6 @@ var _fps_label: Label
 var _fps_accum := 0.0
 var _status: PanelContainer
 var _toolbar: HBoxContainer
-var _menu_bar: MenuBar
 var _debug_grid: GridContainer
 var _debug_values: Dictionary = {}
 var _view_buttons: Dictionary = {}
@@ -56,8 +49,6 @@ var _bg: ColorRect
 var _snapshot_dialog: FileDialog
 var _whats_here: PopupPanel
 var _whats_here_label: RichTextLabel
-var _hours_menu: PopupMenu
-var _view_menu: PopupMenu
 var _start_msec := Time.get_ticks_msec()
 var _sounds: Dictionary = {}
 var _player: AudioStreamPlayer
@@ -80,12 +71,11 @@ func _ready() -> void:
 	add_child(_bg)
 	_content = Control.new()
 	_content.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_content.offset_top = _toolbar_height() + _menu_height() + _insets().y
+	_content.offset_top = _toolbar_height() + _insets().y
 	_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_content)
 	_build_views()
 	_build_overlays()
-	_build_menu_bar()
 	_build_toolbar()
 	_build_dialogs()
 	_player = AudioStreamPlayer.new()
@@ -276,146 +266,7 @@ func _build_overlays() -> void:
 	_whats_here.add_child(_whats_here_label)
 	_content.add_child(_whats_here)
 
-func _build_menu_bar() -> void:
-	_menu_bar = MenuBar.new()
-	_menu_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_menu_bar.offset_top = _insets().y
-	_menu_bar.offset_bottom = _insets().y + _menu_height()
-	_menu_bar.prefer_global_menu = true
-	_menu_bar.visible = not Layout.is_ios()   # no menu bar on iOS; the toolbar has the main commands
-	add_child(_menu_bar)
-
-	var file := PopupMenu.new()
-	file.name = "File"
-	file.add_item("Take Snapshot…", 1)
-	file.add_separator()
-	file.add_item("Preferences…", 2)
-	file.add_separator()
-	file.add_item("Quit", 3)
-	file.id_pressed.connect(_on_file_menu)
-	_menu_bar.add_child(file)
-
-	_view_menu = PopupMenu.new()
-	_view_menu.name = "View"
-	_view_menu.add_radio_check_item("3D Globe", 0)
-	_view_menu.add_radio_check_item("Flat – North Centered", 1)
-	_view_menu.add_radio_check_item("Flat – South Centered", 2)
-	_view_menu.add_radio_check_item("Rectangular", 3)
-	_view_menu.add_radio_check_item("Cubic World", 4)
-	_view_menu.add_separator()
-	_view_menu.add_item("Select Map…", 10)
-	_view_menu.add_item("Reset View", 11)
-	_view_menu.add_check_item("Lock World", 12)
-	_view_menu.add_separator()
-	_view_menu.add_check_item("Show Night", 13)
-	_view_menu.add_check_item("Show Cities", 14)
-	_view_menu.add_check_item("Show Status Bar", 15)
-	_view_menu.id_pressed.connect(_on_view_menu)
-	_menu_bar.add_child(_view_menu)
-
-	_hours_menu = PopupMenu.new()
-	_hours_menu.name = "Hours"
-	var hour_items := [["No Hours", Settings.HOURS_NONE], ["Solar Time", Settings.HOURS_SOLAR],
-		["Relative to Noon", Settings.HOURS_NOON], ["Relative to Home Location", Settings.HOURS_LOCATION],
-		["Wall Clock", Settings.HOURS_WALL]]
-	for i in range(hour_items.size()):
-		_hours_menu.add_radio_check_item(hour_items[i][0], i)
-	_hours_menu.id_pressed.connect(func(id: int) -> void: Settings.set_value("hour_type", hour_items[id][1]))
-	_menu_bar.add_child(_hours_menu)
-
-	var quakes := PopupMenu.new()
-	quakes.name = "Earthquakes"
-	quakes.add_item("Earthquake List…", 1)
-	quakes.add_item("Refresh Earthquakes", 2)
-	quakes.add_check_item("Show Earthquakes", 3)
-	quakes.add_separator()
-	quakes.add_item("Live Data Status…", 4)
-	quakes.id_pressed.connect(_on_quake_menu)
-	quakes.about_to_popup.connect(func() -> void: quakes.set_item_checked(2, Settings.get_bool("enable_earthquakes")))
-	_menu_bar.add_child(quakes)
-
-	var tools := PopupMenu.new()
-	tools.name = "Tools"
-	tools.add_item("Today's Times…", 1)
-	tools.add_item("My Locations…", 6)
-	tools.add_item("Earthquake Regions…", 7)
-	tools.add_item("Debugger…", 8)
-	tools.add_check_item("Show Mouse Coordinates", 2)
-	tools.add_check_item("Attract Mode", 3)
-	tools.add_separator()
-	tools.add_check_item("Show Debug Information", 4)
-	tools.add_item("Reset Settings", 5)
-	tools.id_pressed.connect(_on_tools_menu)
-	tools.about_to_popup.connect(func() -> void:
-		tools.set_item_checked(tools.get_item_index(2), Settings.get_bool("mouse_tracking"))
-		tools.set_item_checked(tools.get_item_index(3), Settings.get_bool("attract_mode"))
-		tools.set_item_checked(tools.get_item_index(4), Settings.get_bool("show_debug_grid")))
-	_menu_bar.add_child(tools)
-
-	var help := PopupMenu.new()
-	help.name = "Help"
-	help.add_item("About Flatland…", 1)
-	help.id_pressed.connect(func(_id: int) -> void: _action_about())
-	_menu_bar.add_child(help)
-
-	_view_menu.about_to_popup.connect(_refresh_menu_checks)
-	_hours_menu.about_to_popup.connect(_refresh_menu_checks)
-
-func _toggle(key: String) -> void:
-	Settings.set_value(key, not Settings.get_bool(key))
-
-func _on_file_menu(id: int) -> void:
-	match id:
-		1: _action_snapshot()
-		2: _action_preferences()
-		3: get_tree().quit()
-
-func _on_view_menu(id: int) -> void:
-	var types := [Settings.VIEW_GLOBE, Settings.VIEW_FLAT_NORTH, Settings.VIEW_FLAT_SOUTH, Settings.VIEW_RECT, Settings.VIEW_CUBIC]
-	if id < 5:
-		Settings.set_value("view_type", types[id])
-		return
-	match id:
-		10: _action_select_map()
-		11: _action_reset_view()
-		12: _toggle("world_locked")
-		13: _toggle("show_night")
-		14: _toggle("show_cities")
-		15: _toggle("show_status_bar")
-
-func _on_quake_menu(id: int) -> void:
-	match id:
-		1: _action_quake_list()
-		2:
-			QuakeService.refresh()
-			_status.post("Refreshing earthquake data.", 4.0)
-		3: _toggle("enable_earthquakes")
-		4: _action_live_status()
-
-func _on_tools_menu(id: int) -> void:
-	match id:
-		1: _action_times()
-		2: _toggle("mouse_tracking")
-		3: _toggle("attract_mode")
-		4: _toggle("show_debug_grid")
-		5: Settings.reset_all()
-		6: _popup(_locations)
-		7: _popup(_regions)
-		8: _popup(_debugger)
-
-func _refresh_menu_checks() -> void:
-	var types := [Settings.VIEW_GLOBE, Settings.VIEW_FLAT_NORTH, Settings.VIEW_FLAT_SOUTH, Settings.VIEW_RECT, Settings.VIEW_CUBIC]
-	for i in range(5):
-		_view_menu.set_item_checked(i, types[i] == Settings.get_string("view_type"))
-	_view_menu.set_item_checked(_view_menu.get_item_index(12), Settings.get_bool("world_locked"))
-	_view_menu.set_item_checked(_view_menu.get_item_index(13), Settings.get_bool("show_night"))
-	_view_menu.set_item_checked(_view_menu.get_item_index(14), Settings.get_bool("show_cities"))
-	_view_menu.set_item_checked(_view_menu.get_item_index(15), Settings.get_bool("show_status_bar"))
-	var hour_keys := [Settings.HOURS_NONE, Settings.HOURS_SOLAR, Settings.HOURS_NOON, Settings.HOURS_LOCATION, Settings.HOURS_WALL]
-	for i in range(hour_keys.size()):
-		_hours_menu.set_item_checked(i, hour_keys[i] == Settings.get_string("hour_type"))
-
-## iOS has no menu bar. Nearly everything the menus held is in the toolbar or Preferences; this one
+## There is no menu bar on any platform. Nearly everything the menus held is in the toolbar or Preferences; this one
 ## "More" button holds the few commands that were only in the menus.
 func _build_more_button() -> void:
 	var more := PopupMenu.new()
@@ -475,8 +326,8 @@ func _build_toolbar() -> void:
 	sb.content_margin_bottom = 4
 	_toolbar_bar.add_theme_stylebox_override("panel", sb)
 	_toolbar_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_toolbar_bar.offset_top = _menu_height() + _insets().y
-	_toolbar_bar.offset_bottom = _menu_height() + _insets().y + _toolbar_height()
+	_toolbar_bar.offset_top = _insets().y
+	_toolbar_bar.offset_bottom = _insets().y + _toolbar_height()
 	add_child(_toolbar_bar)
 	# The toolbar scrolls sideways when it is wider than the screen (a phone in portrait).
 	var scroll := ScrollContainer.new()
@@ -496,8 +347,7 @@ func _build_toolbar() -> void:
 	_icon_button("CameraButtonUnpressed", "Snapshot", "Take a snapshot of the view.", _action_snapshot)
 	_icon_button("EarthquakeIcon", "Earthquakes", "Show the list of earthquakes.", _action_quake_list)
 	_welcome_button = _icon_button("GlobeIcon", "Welcome", "Show or hide the welcome text.", _globe.toggle_intro)
-	if Layout.is_ios():
-		_build_more_button()
+	_build_more_button()
 	_globe.intro_changed.connect(_update_welcome_button)
 	_update_welcome_button(_globe.is_intro_showing())
 
@@ -588,11 +438,9 @@ func _relayout() -> void:
 	if not Layout.is_phone():
 		return
 	var ins := _insets()
-	_content.offset_top = _toolbar_height() + _menu_height() + ins.y
-	_menu_bar.offset_top = ins.y
-	_menu_bar.offset_bottom = ins.y + _menu_height()
-	_toolbar_bar.offset_top = _menu_height() + ins.y
-	_toolbar_bar.offset_bottom = _menu_height() + ins.y + _toolbar_height()
+	_content.offset_top = _toolbar_height() + ins.y
+	_toolbar_bar.offset_top = ins.y
+	_toolbar_bar.offset_bottom = ins.y + _toolbar_height()
 	_fps_label.offset_right = -14 - ins.z
 	var bottom_gap := 12.0 * Layout.ui_scale() + ins.w
 	_status.offset_bottom = -bottom_gap
