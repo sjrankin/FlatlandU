@@ -1,7 +1,8 @@
 class_name NativeUI
 extends RefCounted
-## Bridge to the native user interface (a Swift extension, "FlatlandNativeUI", in native/): real SwiftUI
-## screens instead of Godot-drawn dialogs. iOS uses it for the dialogs below; macOS can with `-- --native-ui`.
+## Bridge to the native user interface: real SwiftUI screens (iOS, a Swift extension in native/FlatlandNativeUI)
+## or Jetpack Compose screens (Android, a plugin in native/FlatlandNativeUIAndroid) instead of Godot-drawn
+## dialogs. Phones use it for the dialogs below; macOS can with `-- --native-ui`.
 ##
 ## A dialog that has a native version provides two methods:
 ##   native_screen() -> Dictionary   {"screen": {title, pages: [{title, items: [...]}], ...}, "values": {key: value}}
@@ -14,7 +15,8 @@ extends RefCounted
 ##
 ## Godot -> native: JSON text through the extension's showScreen / updateScreen / updateValue / closeScreen.
 ## Native -> Godot: its signals value_changed(key, json), action_triggered(id), sheet_closed().
-## Where the extension is missing (desktop, Android) available() is false and the Godot dialog is used.
+## Both platforms have the same calls and signals. Where the native code is missing (a desktop build, or a build
+## without the plugin) available() is false and the Godot dialog is used.
 
 const CLASS_NAME := "FlatlandNativeUI"
 
@@ -29,7 +31,7 @@ static var _toolbar_px := 0
 
 ## Should native screens be used on this platform?
 static func wanted() -> bool:
-	return (Layout.is_ios() or _forced_on()) and available()
+	return (Layout.is_phone() or _forced_on()) and available()
 
 static func _forced_on() -> bool:
 	if _forced < 0:
@@ -76,6 +78,8 @@ static func _on_toolbar_height(pixels: int) -> void:
 
 ## True when the Swift extension is loaded.
 static func available() -> bool:
+	if OS.get_name() == "Android":
+		return Engine.has_singleton(CLASS_NAME)   # the Kotlin plugin registers itself as a singleton
 	return ClassDB.class_exists(CLASS_NAME)
 
 static func is_open() -> bool:
@@ -119,7 +123,7 @@ static func close() -> void:
 static func _connect() -> void:
 	if _bridge != null:
 		return
-	_bridge = ClassDB.instantiate(CLASS_NAME)
+	_bridge = Engine.get_singleton(CLASS_NAME) if OS.get_name() == "Android" else ClassDB.instantiate(CLASS_NAME)
 	_bridge.connect("value_changed", _on_value_changed)
 	_bridge.connect("action_triggered", _on_action_triggered)
 	_bridge.connect("sheet_closed", _on_closed)

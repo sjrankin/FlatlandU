@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Godot finds the plugin class through this entry (Android plugin v2). -->
+        <meta-data
+            android:name="org.godotengine.plugin.v2.FlatlandNativeUI"
+            android:value="com.flatland.nativeui.FlatlandNativeUIPlugin" />
+    </application>
+</manifest>

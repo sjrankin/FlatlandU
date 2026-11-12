@@ -535,9 +535,9 @@ func _phone_toolbar_height() -> int:
 	var rows := int(ceil(float(_toolbar.get_child_count()) / float(cols)))
 	return _toolbar_height() * maxi(rows, 1)
 
-## On iOS the button bar is a SwiftUI view (see NativeUI) and the Godot one stays hidden.
+## On phones the button bar is a native view (SwiftUI, Compose; see NativeUI) and the Godot one stays hidden.
 func _native_toolbar_on() -> bool:
-	return Layout.is_ios() and NativeUI.toolbar_wanted()
+	return Layout.is_phone() and NativeUI.toolbar_wanted()
 
 ## The native bar's buttons (same commands as the Godot toolbar).
 func native_toolbar() -> Array:

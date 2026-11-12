@@ -19,10 +19,6 @@ boot_splash/image="res://Assets/Splash.png"
 config/icon="res://Assets/AppIcon.png"
 boot_splash/show_image.ios=false
 
-[editor_plugins]
-
-enabled=PackedStringArray("res://addons/build_number/plugin.cfg")
-
 [autoload]
 
 Settings="*res://scripts/core/settings.gd"
@@ -37,6 +33,10 @@ window/size/viewport_width=1280
 window/size/viewport_height=800
 window/handheld/orientation=6
 window/ios/suppress_ui_gesture=false
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/FlatlandNativeUI/plugin.cfg", "res://addons/build_number/plugin.cfg")
 
 [rendering]
 
