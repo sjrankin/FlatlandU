@@ -1,5 +1,8 @@
 package com.flatland.nativeui
 
+import android.content.Context
+import android.os.Build
+import android.os.PowerManager
 import org.godotengine.godot.Godot
 import org.godotengine.godot.plugin.GodotPlugin
 import org.godotengine.godot.plugin.SignalInfo
@@ -15,6 +18,8 @@ import org.godotengine.godot.plugin.UsedByGodot
  *   updateValue(key, valueJson)           one value changed on the Godot side
  *   closeScreen()                         close it
  *   showToolbar / updateToolbar(buttonsJson), hideToolbar()   the button bar
+ *
+ *   powerState(): String                  "normal", "low_power" (Battery Saver), "thermal" (hot) or "critical"
  *
  *   value_changed(key, value_json), action_triggered(id), sheet_closed(),
  *   toolbar_tapped(id), toolbar_height_changed(pixels)
@@ -73,6 +78,19 @@ class FlatlandNativeUIPlugin(private val host: Godot) : GodotPlugin(host) {
 
     @UsedByGodot
     fun closeScreen() = ui { sheet?.dismiss(notify = true) }
+
+    /** Battery Saver and the device's heat level, so Godot can lower its frame rate. */
+    @UsedByGodot
+    fun powerState(): String {
+        val power = activity?.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return "normal"
+        if (Build.VERSION.SDK_INT >= 29) {
+            when {
+                power.currentThermalStatus >= PowerManager.THERMAL_STATUS_CRITICAL -> return "critical"
+                power.currentThermalStatus >= PowerManager.THERMAL_STATUS_SEVERE -> return "thermal"
+            }
+        }
+        return if (power.isPowerSaveMode) "low_power" else "normal"
+    }
 
     @UsedByGodot
     fun showToolbar(buttonsJson: String) = ui {

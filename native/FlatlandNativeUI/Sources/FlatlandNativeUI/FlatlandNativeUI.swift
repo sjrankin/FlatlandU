@@ -23,6 +23,9 @@ import AppKit
 ///   showToolbar(buttonsJson) / updateToolbar(buttonsJson) / hideToolbar()
 ///   toolbar_tapped(id)                     a button, or an entry of a button's menu, was tapped
 ///   toolbar_height_changed(pixels)         the bar's height (without the bottom safe area), in pixels
+///
+/// Power (see PowerManager in Godot):
+///   powerState() -> String                 "normal", "low_power", "thermal" (hot) or "critical"
 @Godot
 final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
     @Signal var valueChanged: SignalWithArguments<String, String>
@@ -83,6 +86,17 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
     func closeScreen() {
         DispatchQueue.main.async { [self] in
             MainActor.assumeIsolated { presenter?.dismiss(notify: true) }
+        }
+    }
+
+    /// Low Power Mode and the device's heat level, so Godot can lower its frame rate.
+    @Callable
+    func powerState() -> String {
+        let info = ProcessInfo.processInfo
+        switch info.thermalState {
+        case .critical: return "critical"
+        case .serious: return "thermal"
+        default: return info.isLowPowerModeEnabled ? "low_power" : "normal"
         }
     }
 

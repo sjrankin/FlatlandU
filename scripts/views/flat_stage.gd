@@ -80,7 +80,7 @@ func _ready() -> void:
 	add_child(_container)
 	_stage_vp = SubViewport.new()
 	_stage_vp.own_world_3d = true
-	_stage_vp.msaa_3d = Viewport.MSAA_4X
+	PowerManager.register_viewport(_stage_vp)
 	_container.add_child(_stage_vp)
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
@@ -109,10 +109,13 @@ func _ready() -> void:
 	_sun_light.omni_range = 120.0
 	_sun_light.omni_attenuation = 0.001
 	_sun_light.light_energy = 1.4
-	_sun_light.shadow_enabled = true
+	_sun_light.shadow_enabled = PowerManager.shadows_allowed()
 	_sun_light.shadow_bias = 0.04
 	_sun_light.shadow_normal_bias = 1.0
 	_stage_vp.add_child(_sun_light)
+	Settings.changed.connect(func(key: String, _v: Variant) -> void:
+		if key == "graphics_quality":
+			_sun_light.shadow_enabled = PowerManager.shadows_allowed())
 	_sun = Sprite3D.new()
 	_sun.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_sun.shaded = false
@@ -197,7 +200,7 @@ func _apply_camera() -> void:
 	_camera.v_offset = ((reserved_top - reserved_bottom) * 0.5) / maxf(1.0, size.y) * visible_height
 
 func _process(_delta: float) -> void:
-	if not visible:
+	if not visible or not PowerManager.drawing():
 		return
 	_update_sun()
 	_poll += _delta

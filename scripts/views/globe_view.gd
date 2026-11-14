@@ -305,7 +305,7 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 		"show_satellites":
 			_sat_node.visible = Settings.get_bool("show_satellites")
 			_apply_camera()
-		"show_shadows_3d":
+		"show_shadows_3d", "graphics_quality":
 			_apply_shadows()
 		"enable_earthquakes", "quake_min_magnitude", "quake_max_age_days", "quake_shape", "quake_scale", \
 		"quake_indicator", "quake_highlight_new", "quake_recent_hours":
@@ -369,7 +369,8 @@ func _set_tex(mat: ShaderMaterial, tex: Texture2D) -> void:
 ## Turn the 3D shadows cast by labels, cities and the like on or off. The invisible sphere that
 ## shades the night side is on its own layer and always keeps casting, so night-side objects stay dark.
 func _apply_shadows() -> void:
-	_sun.shadow_caster_mask = 0xFFFFF if Settings.get_bool("show_shadows_3d") else EARTH_SHADOW_LAYER
+	var on := Settings.get_bool("show_shadows_3d") and PowerManager.shadows_allowed()
+	_sun.shadow_caster_mask = 0xFFFFF if on else EARTH_SHADOW_LAYER
 
 ## The star field sphere. It is centred on (and moves with) the camera, sits just beyond everything
 ## else in the scene, and shows the sky a viewer at the camera's position would see, plus the sun.
@@ -1300,6 +1301,8 @@ func _add_quake_indicator(q: Dictionary) -> void:
 				var tw := mi.create_tween().set_loops()
 				tw.tween_property(mi, "scale", Vector3.ONE * (1.2 + 0.3 * fade), dur)
 				tw.tween_property(mi, "scale", Vector3.ONE, dur)
+		"Arrow and Ring":
+			_add_arrow_and_ring(lat, lon, mag)
 		"Radiating Rings":
 			var rr := TorusMesh.new()
 			rr.inner_radius = 0.75
@@ -1356,9 +1359,49 @@ func _add_quake_indicator(q: Dictionary) -> void:
 			var tw := spin.create_tween().set_loops()
 			tw.tween_property(spin, "rotation:y", TAU, 10.0 - mag + 2.0).as_relative()
 
+## The "Arrow and Ring" indicator: no animation. An arrow points down at the spot and a ring lies on the
+## surface around it; the arrow's size and its height above the surface, and the ring's radius, all grow in
+## proportion to the magnitude.
+func _add_arrow_and_ring(lat: float, lon: float, mag: float) -> void:
+	var holder := _up_node(lat, lon, R + 0.02)
+	_quakes_node.add_child(holder)
+	var plain := Shapes.plain(Color("#ff2400"))
+	var ring_mesh := TorusMesh.new()
+	ring_mesh.outer_radius = 0.2 * mag
+	ring_mesh.inner_radius = 0.2 * mag * 0.8
+	var ring := MeshInstance3D.new()
+	ring.mesh = ring_mesh
+	ring.material_override = plain
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	holder.add_child(ring)
+	var k := 0.15 * mag                        # arrow size
+	var arrow := Node3D.new()
+	arrow.scale = Vector3.ONE * k
+	arrow.position.y = 0.1 * mag + 0.667 * k   # the tip hovers this high above the surface
+	holder.add_child(arrow)
+	var head := PrismMesh.new()
+	head.size = Vector3(0.85, 0.667, 0.2)
+	var head_mi := MeshInstance3D.new()
+	head_mi.mesh = head
+	head_mi.rotation_degrees = Vector3(0, 0, 180)     # apex toward the surface
+	head_mi.position = Vector3(0, -0.333, 0)
+	head_mi.material_override = plain
+	head_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	arrow.add_child(head_mi)
+	var stem := BoxMesh.new()
+	stem.size = Vector3(0.2125, 1.0, 0.2)
+	var stem_mi := MeshInstance3D.new()
+	stem_mi.mesh = stem
+	stem_mi.position = Vector3(0, 0.5, 0)
+	stem_mi.material_override = plain
+	stem_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	arrow.add_child(stem_mi)
+
 # MARK: - Time
 
 func _process(delta: float) -> void:
+	if not PowerManager.drawing():
+		return   # a sheet covers the screen or the app is in the background: nobody sees the globe
 	var vs := get_viewport().get_visible_rect().size
 	if vs != _vp_size:
 		_vp_size = vs

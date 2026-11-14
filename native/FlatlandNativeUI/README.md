@@ -1,7 +1,7 @@
 # FlatlandNativeUI
 
 Native (SwiftUI) screens for Flatland, loaded by Godot as a GDExtension written with
-[SwiftGodot](https://github.com/migueldeicaza/SwiftGodot). Prototype: the Preferences screen only.
+[SwiftGodot](https://github.com/migueldeicaza/SwiftGodot). Preferences, About, Live Data, Today's Times, Earthquakes, Satellites, My Locations, Earthquake Regions, the Debugger and the bottom button bar. The overall structure and the full build instructions are in [Implementation.md](../../Implementation.md); this file keeps the Swift-side details.
 
 ## How it fits together
 

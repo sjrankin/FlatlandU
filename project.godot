@@ -26,12 +26,14 @@ MapCatalog="*res://scripts/core/map_catalog.gd"
 CityDB="*res://scripts/core/city_db.gd"
 QuakeService="*res://scripts/core/quake_service.gd"
 SatelliteService="*res://scripts/core/satellite_service.gd"
+PowerManager="*res://scripts/core/power_manager.gd"
 
 [display]
 
 window/size/viewport_width=1280
 window/size/viewport_height=800
 window/handheld/orientation=6
+window/energy_saving/keep_screen_on=false
 window/ios/suppress_ui_gesture=false
 
 [editor_plugins]

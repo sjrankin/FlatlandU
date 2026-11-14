@@ -82,6 +82,15 @@ static func available() -> bool:
 		return Engine.has_singleton(CLASS_NAME)   # the Kotlin plugin registers itself as a singleton
 	return ClassDB.class_exists(CLASS_NAME)
 
+## The device's power state from the native code: "normal", "low_power" (Low Power Mode / Battery Saver),
+## "thermal" (hot) or "critical". "normal" where there is no native code.
+static func power_state() -> String:
+	if not available():
+		return "normal"
+	_connect()
+	var method := "power_state" if _bridge.has_method("power_state") else "powerState"
+	return str(_bridge.call(method))
+
 static func is_open() -> bool:
 	return _open
 
@@ -102,6 +111,8 @@ static func present(owner: Object) -> bool:
 		_call("update_screen", JSON.stringify(data["screen"]), JSON.stringify(data["values"]))
 	else:
 		_open = true
+		if Layout.is_phone():
+			PowerManager.set_covered(true)   # nothing to draw under a full-screen sheet
 		_call("show_screen", JSON.stringify(data["screen"]), JSON.stringify(data["values"]))
 	return true
 
@@ -152,6 +163,7 @@ static func _on_action_triggered(id: String) -> void:
 
 static func _on_closed() -> void:
 	_open = false
+	PowerManager.set_covered(false)
 	var owner := _owner
 	_owner = null
 	_last_json = ""

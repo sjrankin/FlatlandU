@@ -30,6 +30,7 @@ func _ready() -> void:
 	_quakes(tabs)
 	_colors(tabs)
 	_location(tabs)
+	_power(tabs)
 	SettingControls.end_recording()
 	var reset := Button.new()
 	reset.text = "Reset All Settings"
@@ -172,7 +173,7 @@ func _quakes(tabs: TabContainer) -> void:
 	p.add_child(SettingControls.check("Highlight new earthquakes", "quake_highlight_new"))
 	p.add_child(SettingControls.option("New earthquake indicator", "quake_indicator", [
 		["None", "None"], ["Static Ring", "Static Ring"], ["Animated Ring", "Animated Ring"],
-		["Radiating Rings", "Radiating Rings"], ["Glowing Sphere", "Glowing Sphere"],
+		["Arrow and Ring (still)", "Arrow and Ring"], ["Radiating Rings", "Radiating Rings"], ["Glowing Sphere", "Glowing Sphere"],
 		["Triangle Ring Inward", "Triangle Ring Inward"], ["Triangle Ring Outward", "Triangle Ring Outward"]]))
 	p.add_child(SettingControls.option("New means within", "quake_recent_hours", [
 		["Last 12 hours", 12], ["Last 24 hours", 24], ["Last 48 hours", 48], ["Last 72 hours", 72],
@@ -216,6 +217,27 @@ func _location(tabs: TabContainer) -> void:
 	le.focus_exited.connect(func() -> void: Settings.set_value("home_name", le.text))
 	row.add_child(le)
 	p.add_child(row)
+
+func _power(tabs: TabContainer) -> void:
+	var p := SettingControls.page(tabs, "Power")
+	p.add_child(SettingControls.section("Frame rate"))
+	p.add_child(SettingControls.option("Frame rate", "frame_rate", [
+		["Auto (60 while touching, 30 when idle)", "Auto"], ["30 fps", "30"], ["60 fps", "60"], ["120 fps", "120"]]))
+	p.add_child(SettingControls.check("Draw less often when nothing is touched or moving (phones)", "draw_on_demand"))
+	p.add_child(SettingControls.check("Use 30 fps in Low Power Mode or when the device is hot", "follow_low_power"))
+	p.add_child(SettingControls.section("Graphics"))
+	p.add_child(SettingControls.option("Quality", "graphics_quality", [
+		["Auto (Medium on a phone, High elsewhere)", "Auto"],
+		["High (4x anti-aliasing, full resolution)", "High"],
+		["Medium (2x anti-aliasing, 80% resolution)", "Medium"],
+		["Low (no anti-aliasing, 65% resolution, no 3D shadows)", "Low"]]))
+	p.add_child(SettingControls.section("Screen"))
+	p.add_child(SettingControls.check("Keep the screen on (no auto-lock)", "keep_screen_on"))
+	var note := Label.new()
+	note.text = "Lower frame rates and lower graphics quality use much less battery and keep the device cooler. Flatland stops drawing while a dialog covers the screen."
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	p.add_child(note)
+	SettingControls.record_item({"type": "paragraph", "title": note.text, "style": "caption"})
 
 # MARK: - Native (SwiftUI) version; see NativeUI
 

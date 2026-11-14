@@ -55,6 +55,7 @@ var _start_msec := Time.get_ticks_msec()
 var _sounds: Dictionary = {}
 var _player: AudioStreamPlayer
 var _open_on_start := ""
+var _fake_quakes := false
 var _resize_to := ""
 var _native_snap := ""
 var _cam_args := PackedFloat64Array()
@@ -97,6 +98,8 @@ func _ready() -> void:
 		_globe.set_camera(_cam_args[0], _cam_args[1], _cam_args[2])
 	if _open_on_start != "":
 		call_deferred("_open_for_test", _open_on_start)
+	if _fake_quakes:
+		call_deferred("_inject_fake_quakes")
 	var t := Timer.new()
 	t.wait_time = 1.0
 	t.autostart = true
@@ -108,6 +111,8 @@ func _parse_command_line() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--time="):
 			Solar.time_offset = float(arg.substr(7)) - Time.get_unix_time_from_system()
+		elif arg == "--fake-quakes":
+			_fake_quakes = true   # development: show made-up earthquakes (no network needed)
 		elif arg.begins_with("--view="):
 			Settings.override("view_type", arg.substr(7))
 		elif arg.begins_with("--map="):
@@ -140,7 +145,7 @@ func _build_views() -> void:
 	_globe_container.mouse_filter = Control.MOUSE_FILTER_PASS
 	_content.add_child(_globe_container)
 	_globe_viewport = SubViewport.new()
-	_globe_viewport.msaa_3d = Viewport.MSAA_4X
+	PowerManager.register_viewport(_globe_viewport)
 	_globe_viewport.handle_input_locally = true
 	_globe_viewport.gui_disable_input = false
 	_globe_container.add_child(_globe_viewport)
@@ -735,6 +740,18 @@ func _process(delta: float) -> void:
 			get_viewport().get_texture().get_image().save_png(_shot_path)
 			_shot_path = ""
 			get_tree().quit()
+
+func _inject_fake_quakes() -> void:
+	var now := Time.get_unix_time_from_system()
+	var list := [[3.0, 35.0, -118.0], [4.5, 38.0, 142.0], [5.5, -20.0, -70.0], [6.5, 10.0, 125.0], [7.5, 0.0, 0.0], [8.5, 60.0, -150.0]]
+	var out: Array = []
+	for i in range(list.size()):
+		out.append({"id": "fake%d" % i, "magnitude": list[i][0], "place": "Test", "time": now - 600.0 * (i + 1),
+			"lat": list[i][1], "lon": list[i][2], "depth": 10.0})
+	QuakeService._http.cancel_request()   # keep the made-up ones: no real fetch
+	QuakeService._timer.stop()
+	QuakeService.quakes = out
+	QuakeService.quakes_updated.emit(out)
 
 func _open_for_test(what: String) -> void:
 	match what:

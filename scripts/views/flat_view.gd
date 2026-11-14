@@ -112,7 +112,9 @@ func _on_texture_ready(file_name: String, tex: Texture2D) -> void:
 	queue_redraw()
 
 func _process(delta: float) -> void:
-	if visible and (Settings.get_bool("enable_earthquakes") or Settings.get_bool("show_satellites")):
+	if not PowerManager.drawing():
+		return   # a sheet covers the screen (or the app is in the background): skip the redraw work too
+	if visible and (PowerManager.quakes_animate() or Settings.get_bool("show_satellites")):
 		queue_redraw()   # animate the radiating rings and the moving satellites
 	_tick += delta
 	if _tick >= 1.0:
@@ -503,7 +505,10 @@ func _draw_quakes() -> void:
 	for q in QuakeService.visible_quakes():
 		var p := project(q["lat"], q["lon"])
 		var col := QuakeService.magnitude_color(q["magnitude"])
-		if Time.get_unix_time_from_system() - float(q["time"]) <= 86400.0:
+		var indicator := Settings.get_string("quake_indicator")
+		if Time.get_unix_time_from_system() - float(q["time"]) <= 86400.0 and indicator == "Arrow and Ring":
+			_draw_arrow_and_ring(p, q["magnitude"])
+		elif Time.get_unix_time_from_system() - float(q["time"]) <= 86400.0 and indicator != "None":
 			# Radiating ring for quakes in the last 24 hours, as in Flatland.
 			var dur: float = 1.0 + (1.0 - q["magnitude"] / 10.0)
 			var ph: float = fposmod(Time.get_ticks_msec() / 1000.0, dur) / dur
@@ -513,6 +518,20 @@ func _draw_quakes() -> void:
 			draw_circle(p, (3.0 + q["magnitude"] * 0.7) * _k(), Color(col, 0.55))
 			draw_arc(p, (3.0 + q["magnitude"] * 0.7) * _k(), 0.0, TAU, 20, col, 1.0, true)
 		draw_string(_font, p + Vector2(8, -8), "%.1f" % q["magnitude"], HORIZONTAL_ALIGNMENT_LEFT, -1, int(26 * _k()), col)
+
+## The still "Arrow and Ring" indicator: a ring around the spot and a down-pointing arrow above it. The ring's
+## radius, the arrow's size and its height above the spot all grow in proportion to the magnitude.
+func _draw_arrow_and_ring(p: Vector2, mag: float) -> void:
+	var k := _k()
+	var red := Color(1.0, 0.14, 0.0, 0.9)
+	draw_arc(p, 3.5 * mag * k, 0.0, TAU, 40, red, 3.0 * k, true)
+	var s := 3.2 * mag * k                       # arrow size
+	var tip := p + Vector2(0.0, -1.2 * mag * k)  # the tip hovers this high above the spot
+	var hw := 0.425 * s
+	var sw := 0.106 * s
+	var neck := tip + Vector2(0.0, -0.667 * s)
+	draw_colored_polygon(PackedVector2Array([tip, tip + Vector2(hw, -0.667 * s), tip + Vector2(-hw, -0.667 * s)]), red)
+	draw_rect(Rect2(neck + Vector2(-sw, -1.0 * s), Vector2(2.0 * sw, 1.0 * s + 0.5 * k)), red)
 
 ## Satellites: a pill-shaped body with two solar panels, turned along the satellite's track, and a small
 ## label (name and altitude) beside it.

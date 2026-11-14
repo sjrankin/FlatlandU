@@ -26,7 +26,7 @@ func _ready() -> void:
 	svc.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	var vp := SubViewport.new()
 	vp.own_world_3d = true
-	vp.msaa_3d = Viewport.MSAA_4X
+	PowerManager.register_viewport(vp)
 	svc.add_child(vp)
 	vb.add_child(svc)
 	_globe_box = svc

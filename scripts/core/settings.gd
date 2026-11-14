@@ -70,6 +70,11 @@ const DEFAULTS := {
 	"show_debug_grid": false,
 	"show_intro": true,
 	"show_fps": true,
+	"frame_rate": "Auto",           # Auto, 30, 60, 120 (see PowerManager)
+	"follow_low_power": true,
+	"draw_on_demand": true,          # phones: draw only a few times a second when nothing is touched or moving
+	"keep_screen_on": false,
+	"graphics_quality": "Auto",     # Auto, High, Medium, Low (see PowerManager)
 	"show_satellites": false,
 	"tracked_satellites": "25544,48274,20580,27386,25994,27424,28931,39766,16908,29228",
 	"show_shadows": true,
