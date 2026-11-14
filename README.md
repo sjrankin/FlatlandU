@@ -3,9 +3,9 @@ November 2026\
 Stuart Rankin
 
 A Godot 4.7 port of **FlatlandView** (Stuart Rankin's macOS/SceneKit "Flatland" – day and night on the Earth,
-in 3D and flat polar/equirectangular projections). On macOS and Windows the UI (toolbar, dialogs, status bar) is
-built from Godot Control nodes; on iOS and Android the dialogs and the button bar are native (SwiftUI and Jetpack
-Compose). See [Implementation.md](Implementation.md) for how the project is put together and how to build it.
+in 3D and flat polar/equirectangular projections). On Windows the UI (toolbar, dialogs, status bar) is
+built from Godot Control nodes; on macOS, iOS and Android the dialogs and the button bar are native (SwiftUI and
+Jetpack Compose). See [Implementation.md](Implementation.md) for how the project is put together and how to build it.
 
 Animation of FlatlandU running on an iPhone (mirrored to a Mac via Device Hub) in demo mode.\
 <img src="Images/FlatlandUDemoMode.gif" alt="Animation of FlatlandU running on an iPhone in demo mode.">\

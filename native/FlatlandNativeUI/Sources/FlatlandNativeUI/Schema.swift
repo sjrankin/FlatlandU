@@ -73,6 +73,8 @@ enum ItemKind: String {
     case info         // a label and a value (read only)
     case paragraph    // a block of text
     case row          // a list row: accent, title, subtitle, detail; optional check box; tapping sends its id
+    case image        // a picture from the file at `path`, scaled to fit the width
+    case link         // a row that opens a page of text inside the screen (with a Back button): title, page_title, detail = the text
 }
 
 struct ScreenItem: Identifiable {
@@ -97,6 +99,8 @@ struct ScreenItem: Identifiable {
     var selected = false  // row: highlighted as the current choice
     var dimmed = false    // row: drawn faded
     var confirm = ""      // action: ask this question (with the action as the answer) before sending it
+    var path = ""         // image: the picture's file
+    var pageTitle = ""    // link: the title of the page it opens
 }
 
 struct ScreenPage: Identifiable {
@@ -145,6 +149,8 @@ struct ScreenSchema {
             item.checkKey = d["check_key"] as? String ?? ""
             item.style = d["style"] as? String ?? ""
             item.confirm = d["confirm"] as? String ?? ""
+            item.path = d["path"] as? String ?? ""
+            item.pageTitle = d["page_title"] as? String ?? ""
             item.selected = d["selected"] as? Bool ?? false
             item.dimmed = d["dimmed"] as? Bool ?? false
             for (n, o) in (d["options"] as? [[String: Any]] ?? []).enumerated() {

@@ -29,9 +29,19 @@ final class ToolbarModel: ObservableObject {
     /// The buttons changed (their number may have, which can change the height).
     var onButtonsChanged: () -> Void = {}
 
+    // The Mac bar is more compact: a window is often small, and the bar must not take much of it. Ten buttons fit in
+    // one row from about 600 points wide.
+    #if os(macOS)
+    static let rowHeight: CGFloat = 44
+    static let minimumCellWidth: CGFloat = 60
+    static let iconHeight: CGFloat = 20
+    #else
     static let rowHeight: CGFloat = 54
-    static let dividerHeight: CGFloat = 1
     static let minimumCellWidth: CGFloat = 72
+    static let iconHeight: CGFloat = 26
+    #endif
+    static let dividerHeight: CGFloat = 1
+    static let maximumCellWidth: CGFloat = 110
 
     /// Equal rows: with ten buttons and room for six per row, two rows of five.
     static func layout(width: CGFloat, count: Int) -> (columns: Int, rows: Int) {
@@ -71,8 +81,13 @@ struct ToolbarView: View {
                     ToolbarCell(button: button, onTap: model.onTap)
                 }
             }
+            #if os(macOS)
+            // In a wide window the buttons stay together in the middle instead of spreading across the whole width.
+            .frame(maxWidth: ToolbarModel.maximumCellWidth * CGFloat(max(1, model.columns)))
+            #endif
             Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity)
         .background(.bar)
     }
 }
@@ -84,8 +99,12 @@ struct ToolbarCell: View {
     private var label: some View {
         VStack(spacing: 2) {
             Image(systemName: button.symbol)
+                #if os(macOS)
+                .font(.body)
+                #else
                 .font(.title3)
-                .frame(height: 26)
+                #endif
+                .frame(height: ToolbarModel.iconHeight)
             Text(button.title)
                 .font(.caption2)
                 .lineLimit(1)

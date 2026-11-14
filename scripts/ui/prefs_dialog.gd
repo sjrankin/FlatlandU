@@ -93,6 +93,7 @@ func _general(tabs: TabContainer) -> void:
 	p.add_child(SettingControls.check("Show status bar", "show_status_bar"))
 	p.add_child(SettingControls.check("Show frames per second (FPS)", "show_fps"))
 	p.add_child(SettingControls.check("Show sun", "show_sun"))
+	p.add_child(SettingControls.check("Show moon", "show_moon"))
 	p.add_child(SettingControls.check("Show stars", "show_stars"))
 	p.add_child(SettingControls.check("Show shadows under 2D city markers", "show_shadows"))
 	p.add_child(SettingControls.check("Show 3D shadows (labels, cities, earthquakes)", "show_shadows_3d"))

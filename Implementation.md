@@ -37,6 +37,7 @@ FlatlandU/
 |---|---|
 | `scripts/core/settings.gd` (autoload `Settings`) | Every setting, its default, change notification, persistence (`user://settings.cfg`). |
 | `scripts/core/solar.gd`, `geo.gd` | Sun position, equation of time, day/night geometry, geography helpers. |
+| `scripts/core/lunar.gd` | Moon position (right ascension, declination, distance, sub-lunar point) from the Astronomical Almanac's low-precision series. The 3D view draws the Moon at its true size and distance (texture in `Assets/Moon/`); the flat maps do not show it. Setting `show_moon`. |
 | `scripts/core/city_db.gd`, `map_catalog.gd` | Cities, heritage sites, POIs; the catalog of maps and their textures. |
 | `scripts/core/quake_service.gd` | USGS earthquake feed (HTTP, once a minute by default). |
 | `scripts/core/satellite_service.gd` | Satellite elements (CelesTrak) and orbit propagation. |
@@ -68,7 +69,7 @@ Selected with `OS.has_feature("mobile")`, or the `--phone` flag on a desktop (se
 | iOS, macOS | `native/FlatlandNativeUI/` | Swift 6 toolchain (Swift 5 mode), SwiftUI, [SwiftGodot](https://github.com/migueldeicaza/SwiftGodot) GDExtension. Dialogs are sheets (iOS: `UIHostingController` page sheet; macOS: a window, used only for development). The button bar is a view along the bottom edge of Godot's view (iOS) or a window (macOS, development only). |
 | Android | `native/FlatlandNativeUIAndroid/` | Kotlin, Jetpack Compose (Material 3), a Godot Android plug-in (AAR). Dialogs are full-screen overlays that slide up; the button bar is an overlay at the bottom. |
 | Windows | none | The Godot dialogs. |
-| macOS (the app itself) | none | The Godot dialogs and toolbar; the Swift plug-in is only loaded with `--native-ui`. |
+| macOS (the app itself) | `native/FlatlandNativeUI/` | The same SwiftUI screens as iOS, in their own windows; the button bar is a SwiftUI view along the bottom of the Godot window, in as many rows as its width needs. |
 
 `scripts/core/native_ui.gd` (class `NativeUI`) is the single place where Godot code talks to either plug-in; nothing
 else in the project knows which platform's native code is in use.
@@ -143,8 +144,8 @@ Measure with a Release build (the debugger adds load): Xcode's Energy gauge on i
 - **Hour labels**: none / solar / relative to noon / relative to home location / wall clock.
 - **Data**: 410 cities + extras, 1121 UNESCO sites, POIs (exported from `MappableS.db` to `data/*.json`),
   live USGS feed once a minute with new-quake status messages and sounds.
-- **UI**: icon toolbar with a "More" button (original icons on macOS, Windows and the Godot fallback; SF Symbols
-  on iOS and Material icons on Android), time label (UTC/local), status bar, Preferences (General, Map
+- **UI**: icon toolbar with a "More" button (original icons on Windows and the Godot fallback; SF Symbols
+  on iOS and macOS and Material icons on Android), time label (UTC/local), status bar, Preferences (General, Map
   picker with previews, Cities, Grid, Earthquakes, Colors and Fonts, Home, Power), Today's Times, Earthquake list,
   Live Data Status, About (spinning globe), debug info grid, snapshot (file dialog), "what's here" popup
   (right-click / double-click).
@@ -196,8 +197,8 @@ Pass these after `--`, for example `Godot --path . -- --view=Cubic --open=about`
 - Dialogs and pictures: `--open=prefs|map|about|times|quakes|live|satellites|debug|locations|regions|toolbar|click`,
   `--shot=<png>`, `--resize=WxH`.
 - Phone layout in a normal window: `--phone`, `--ui-scale=N`, `--safe=top,bottom,left,right`.
-- Native UI on the Mac: `--native-ui` uses the SwiftUI screens (and shows the button bar in its own window);
-  `--native-snap=<png>` saves a picture of the native screen (or, with `--open=toolbar`, the bar) and quits.
+- Native UI on the Mac is always used. `--native-snap=<png>` saves a picture of the native screen and quits (the bar is
+  part of the Godot window: use the system screenshot).
   `--fake-quakes` shows six made-up earthquakes (magnitude 3 to 8.5) and stops the real fetch, for checking indicators offline.
 
 ## 6. Building
@@ -206,7 +207,7 @@ Pass these after `--`, for example `Godot --path . -- --view=Cubic --open=about`
 
 - Godot 4.7.2 with its export templates (the Android template zip is also used to install the Gradle template).
 - Xcode 27 for macOS and iOS. `xcode-select` points at the command-line tools here, so use
-  `export DEVELOPER_DIR="/Applications/Xcode 27.app/Contents/Developer"`. If SwiftPM cannot clone packages, a broken
+  `export DEVELOPER_DIR="/Applications/Xcode-27.2.app/Contents/Developer"`. If SwiftPM cannot clone packages, a broken
   `/usr/local/bin/git` is first on the path: `export PATH="/usr/bin:$PATH"`.
 - JDK 17 and the Android SDK (platform 35 and 36, build tools) for Android. In Godot's editor settings, set the
   Android SDK and Java SDK paths and the debug keystore.
@@ -231,17 +232,17 @@ if you want the number to carry across machines.
 
 Export from Godot with the "macOS" or "Windows Desktop" preset (Project > Export, or
 `Godot --headless --path . --export-release macOS`). The presets write to `~/Desktop/FlatlandU.dmg` and
-`~/Desktop/FlatlandU.exe`. Neither needs the native plug-ins; the macOS build has the Swift library next to it
-only for the `--native-ui` development mode.
+`~/Desktop/FlatlandU.exe`. The macOS build needs the Swift library (`libFlatlandNativeUI.dylib`, see 6.5) for its
+button bar and dialogs; Windows needs nothing.
 
 ### 6.5 The Swift plug-in (iOS and macOS)
 
 ```bash
 export PATH="/usr/bin:$PATH"
-export DEVELOPER_DIR="/Applications/Xcode 27.app/Contents/Developer"
+export DEVELOPER_DIR="/Applications/Xcode-27.2.app/Contents/Developer"
 cd native/FlatlandNativeUI
 
-# macOS (to try the native screens with `--native-ui`):
+# macOS (the Mac app's button bar and dialogs):
 swift build -c release
 D=../../addons/FlatlandNativeUI/bin/libFlatlandNativeUI.dylib
 rm -f $D && cp .build/release/libFlatlandNativeUI.dylib $D && codesign --force -s - $D

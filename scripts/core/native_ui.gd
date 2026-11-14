@@ -2,7 +2,7 @@ class_name NativeUI
 extends RefCounted
 ## Bridge to the native user interface: real SwiftUI screens (iOS, a Swift extension in native/FlatlandNativeUI)
 ## or Jetpack Compose screens (Android, a plugin in native/FlatlandNativeUIAndroid) instead of Godot-drawn
-## dialogs. Phones use it for the dialogs below; macOS can with `-- --native-ui`.
+## dialogs. iOS, macOS and Android use it for the dialogs below and for the button bar along the bottom of the window.
 ##
 ## A dialog that has a native version provides two methods:
 ##   native_screen() -> Dictionary   {"screen": {title, pages: [{title, items: [...]}], ...}, "values": {key: value}}
@@ -16,7 +16,7 @@ extends RefCounted
 ## Godot -> native: JSON text through the extension's showScreen / updateScreen / updateValue / closeScreen.
 ## Native -> Godot: its signals value_changed(key, json), action_triggered(id), sheet_closed().
 ## Both platforms have the same calls and signals. Where the native code is missing (a desktop build, or a build
-## without the plugin) available() is false and the Godot dialog is used.
+## without the plugin, or Windows and Linux) available() is false and the Godot dialog is used.
 
 const CLASS_NAME := "FlatlandNativeUI"
 
@@ -24,23 +24,36 @@ static var _bridge: Object = null
 static var _open := false
 static var _owner: Object = null
 static var _last_json := ""
-static var _forced := -1
 static var _toolbar_owner: Object = null
 static var _toolbar_json := ""
 static var _toolbar_px := 0
 
-## Should native screens be used on this platform?
+## Should native screens be used on this platform? Not when the app runs embedded in the editor's Game tab (`--embedded`): that process
+## has no Cocoa event loop of its own, so a native window it opens never gets its events (a beach ball, nothing works) and the
+## native button bar cannot be seen. There the Godot dialogs and toolbar are used; run the app in its own window (or export it)
+## to see the native ones.
 static func wanted() -> bool:
-	return (Layout.is_phone() or _forced_on()) and available()
+	return (Layout.is_phone() or OS.get_name() == "macOS") and available() and not _embedded()
 
-static func _forced_on() -> bool:
-	if _forced < 0:
-		_forced = 1 if "--native-ui" in OS.get_cmdline_user_args() else 0
-	return _forced == 1
+static func _embedded() -> bool:
+	return Engine.is_embedded_in_editor() or "--embedded" in OS.get_cmdline_args()
 
-## Is the button bar native? On iOS it replaces the Godot one; on macOS with `--native-ui` it is an extra window.
+## Is the button bar native? On iOS, macOS and Android it replaces the Godot one. Not when the native bar cannot be seen:
+## an app embedded in the editor's Game tab (`--embedded`) is drawn from a hidden window, so a view added to that window
+## never shows; and `give_up_toolbar()` is called when the bar did not appear.
 static func toolbar_wanted() -> bool:
-	return wanted()
+	return wanted() and not _toolbar_given_up \
+			and not "--no-native-toolbar" in OS.get_cmdline_user_args()      # (the flag is for trying the fallback)
+
+static var _toolbar_given_up := false
+
+## The native bar did not come up: take it away so that Godot's own bar is used.
+static func give_up_toolbar() -> void:
+	_toolbar_given_up = true
+	if _bridge != null:
+		_call("hide_toolbar")
+	_toolbar_px = 0
+	_toolbar_owner = null
 
 ## Show the owner's button bar: owner.native_toolbar() -> Array of {id, title, symbol, selected, menu}.
 ## The owner gets native_toolbar_event(id) for taps and native_toolbar_resized() when the bar's height changes.
@@ -111,8 +124,10 @@ static func present(owner: Object) -> bool:
 		_call("update_screen", JSON.stringify(data["screen"]), JSON.stringify(data["values"]))
 	else:
 		_open = true
-		if Layout.is_phone():
-			PowerManager.set_covered(true)   # nothing to draw under a full-screen sheet
+		# Nothing is drawn under a full-screen sheet on a phone. On a desktop the dialog is a window of its own that shares the
+		# main thread with Godot, and a Godot window half hidden behind it makes Godot wait up to a second for each frame
+		# (in nextDrawable), which froze the dialog (a beach ball), so drawing stops there too while a dialog is open.
+		PowerManager.set_covered(true)
 		_call("show_screen", JSON.stringify(data["screen"]), JSON.stringify(data["values"]))
 	return true
 

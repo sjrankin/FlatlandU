@@ -1,6 +1,7 @@
 extends Control
 ## Main window: the counterpart of Flatland's MainController. Hosts the 3D globe and the flat
-## view, the time label, toolbar, status bar and all dialogs. All UI is Godot UI.
+## view, the time label, toolbar, status bar and all dialogs. The button bar and the dialogs are native (SwiftUI on iOS and
+## macOS, Compose on Android; see NativeUI). Windows and Linux, which have no native code, use Godot's own.
 
 const ICON_DIR := "res://Assets/Icons/"
 const APP_VERSION := "1.0 (Godot)"
@@ -74,8 +75,8 @@ func _ready() -> void:
 	add_child(_bg)
 	_content = Control.new()
 	_content.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_content.offset_top = _insets().y if Layout.is_phone() else _toolbar_height() + _insets().y
-	_content.offset_bottom = -(_toolbar_height() + _insets().w) if Layout.is_phone() else 0.0   # phones: toolbar at the bottom
+	_content.offset_top = _insets().y if _toolbar_at_bottom() else _toolbar_height() + _insets().y
+	_content.offset_bottom = -((_toolbar_height() if Layout.is_phone() else NativeUI.toolbar_height()) + _insets().w) if _toolbar_at_bottom() else 0.0
 	_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_content)
 	_build_views()
@@ -93,6 +94,8 @@ func _ready() -> void:
 	QuakeService.fetch_failed.connect(func(reason: String) -> void: _status.post("Earthquake data: " + reason, 5.0))
 	_apply_view_type()
 	_update_debug_grid()
+	_begin_startup_wait()
+	print("Native UI: %s (embedded in the editor: %s)" % ["used" if NativeUI.wanted() else "not used", Engine.is_embedded_in_editor()])
 	get_window().size_changed.connect(_relayout)   # the safe area changes when a phone is rotated
 	if _cam_args.size() == 3:
 		_globe.set_camera(_cam_args[0], _cam_args[1], _cam_args[2])
@@ -239,7 +242,7 @@ func _build_overlays() -> void:
 	_status.anchor_left = 0.04
 	_status.anchor_right = 0.96
 	# One line on a desktop; two lines of larger text on a phone, kept above the home indicator.
-	var bottom_gap := 12.0 * Layout.ui_scale() + (0.0 if Layout.is_phone() else _insets().w)   # phones: the content area already stops above the toolbar
+	var bottom_gap := 12.0 * Layout.ui_scale() + (0.0 if _toolbar_at_bottom() else _insets().w)   # the content area already stops above a bottom toolbar
 	_status.offset_bottom = -bottom_gap
 	_status.offset_top = -bottom_gap - (44.0 if not Layout.is_phone() else 2.0 * Layout.font(22, 0.85) * 1.5 + 36.0)
 	_status.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -291,6 +294,40 @@ func _build_more_button() -> void:
 		var below := Vector2i(_more_button.get_screen_position()) + Vector2i(0, int(_more_button.size.y))
 		more.popup(Rect2i(below, Vector2i.ZERO)))
 
+# MARK: - Start-up
+
+## Everything is built before anything moves: a "Please Wait" cover stays up until the first earthquake data has arrived and been
+## drawn (building the quakes and satellites takes a moment), and only then does the welcome text start. Without the cover the
+## welcome animation would run for a second and then stall while the rest was made.
+func _begin_startup_wait() -> void:
+	var cover := ColorRect.new()
+	cover.color = Settings.get_color("color_background")
+	cover.set_anchors_preset(Control.PRESET_FULL_RECT)
+	cover.mouse_filter = Control.MOUSE_FILTER_STOP
+	var label := Label.new()
+	label.text = "Please Wait…"
+	label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", Layout.font(28))
+	cover.add_child(label)
+	add_child(cover)
+	_finish_startup(cover)
+
+func _finish_startup(cover: Control) -> void:
+	var state := {"arrived": true}      # a dictionary: a lambda gets its own copy of a plain variable
+	if Settings.get_bool("enable_earthquakes") and not _fake_quakes:
+		state["arrived"] = false
+		QuakeService.quakes_updated.connect(func(_q: Array) -> void: state["arrived"] = true, CONNECT_ONE_SHOT)
+		QuakeService.fetch_failed.connect(func(_r: String) -> void: state["arrived"] = true, CONNECT_ONE_SHOT)
+	var give_up := Time.get_ticks_msec() + 8000
+	while not state["arrived"] and Time.get_ticks_msec() < give_up:
+		await get_tree().process_frame
+	for i in range(4):      # let the views draw what has just been built
+		await get_tree().process_frame
+	cover.queue_free()
+	_globe.start_intro()
+
 func _on_more_menu(id: int) -> void:
 	match id:
 		1: _action_times()
@@ -301,7 +338,8 @@ func _on_more_menu(id: int) -> void:
 			_status.post("Refreshing earthquake data.", 4.0)
 
 func _update_welcome_button(showing: bool) -> void:
-	_welcome_button.icon = load(ICON_DIR + ("GlobeIconSelected" if showing else "GlobeIcon") + ".png")
+	if _welcome_button != null:      # the native bar draws its own icon
+		_welcome_button.icon = load(ICON_DIR + ("GlobeIconSelected" if showing else "GlobeIcon") + ".png")
 	NativeUI.refresh_toolbar()
 
 func _icon_button(icon_name: String, label: String, tip: String, action: Callable) -> Button:
@@ -334,8 +372,23 @@ func _icon_button(icon_name: String, label: String, tip: String, action: Callabl
 	_toolbar.add_child(b)
 	return b
 
-## The window toolbar (Flatland uses an NSToolbar with icon-and-label items).
+## The button bar. Where there is native code (iOS, macOS, Android) it is a native view along the bottom of the window and
+## Godot builds nothing; otherwise (Windows, Linux, or a build without the extension) it is built here, along the top
+## on a desktop and along the bottom on a phone.
 func _build_toolbar() -> void:
+	if NativeUI.toolbar_wanted() and NativeUI.show_toolbar(self):
+		_globe.intro_changed.connect(func(_showing: bool) -> void: NativeUI.refresh_toolbar())
+		_place_toolbar()
+		# If the native bar has not come up after a few seconds (its window could not be found), use Godot's own.
+		get_tree().create_timer(3.0).timeout.connect(func() -> void:
+			if NativeUI.toolbar_height() == 0 and _toolbar_bar == null:
+				NativeUI.give_up_toolbar()
+				_build_godot_toolbar()
+				_place_toolbar())
+		return
+	_build_godot_toolbar()
+
+func _build_godot_toolbar() -> void:
 	_toolbar_bar = PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color("#dcdde2")
@@ -379,8 +432,6 @@ func _build_toolbar() -> void:
 	_globe.intro_changed.connect(_update_welcome_button)
 	_update_welcome_button(_globe.is_intro_showing())
 	_place_toolbar()   # now that the buttons exist, size the bar to the rows they need
-	if NativeUI.toolbar_wanted() and NativeUI.show_toolbar(self) and _native_toolbar_on():
-		_toolbar_bar.visible = false
 
 func _build_dialogs() -> void:
 	_prefs = load("res://scripts/ui/prefs_dialog.gd").new()
@@ -409,7 +460,7 @@ func _build_dialogs() -> void:
 # MARK: - Actions (names follow Flatland's IBActions)
 
 func _popup(w: Window, size_hint: Vector2i = Vector2i.ZERO) -> void:
-	# iOS (and macOS with --native-ui): the dialog's native SwiftUI screen, when the extension is there.
+	# The dialog's native screen (SwiftUI on iOS and macOS, Compose on Android), when the extension is there.
 	if NativeUI.wanted() and NativeUI.present(w):
 		return
 	if Layout.is_phone() and w.has_meta("phone_sheet"):
@@ -514,7 +565,8 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 			_apply_view_type()
 		"world_locked":
 			NativeUI.refresh_toolbar()
-			_lock_button.icon = load(ICON_DIR + ("LockWorldIcon" if Settings.get_bool("world_locked") else "UnlockWorldIcon") + ".png")
+			if _lock_button != null:
+				_lock_button.icon = load(ICON_DIR + ("LockWorldIcon" if Settings.get_bool("world_locked") else "UnlockWorldIcon") + ".png")
 		"show_debug_grid":
 			_debug_grid.visible = Settings.get_bool("show_debug_grid")
 		"color_background":
@@ -540,9 +592,14 @@ func _phone_toolbar_height() -> int:
 	var rows := int(ceil(float(_toolbar.get_child_count()) / float(cols)))
 	return _toolbar_height() * maxi(rows, 1)
 
-## On phones the button bar is a native view (SwiftUI, Compose; see NativeUI) and the Godot one stays hidden.
+## Is the button bar a native view (SwiftUI, Compose; see NativeUI) rather than Godot's own?
 func _native_toolbar_on() -> bool:
-	return Layout.is_phone() and NativeUI.toolbar_wanted()
+	return NativeUI.toolbar_wanted()
+
+## The bar is along the bottom of the window on phones and wherever it is native (macOS too); Godot's own bar on Windows
+## and Linux stays along the top.
+func _toolbar_at_bottom() -> bool:
+	return Layout.is_phone() or OS.get_name() == "macOS"
 
 ## The native bar's buttons (same commands as the Godot toolbar).
 func native_toolbar() -> Array:
@@ -584,14 +641,16 @@ func native_toolbar_resized() -> void:
 	_place_toolbar()
 	_relayout()
 
-## Put the toolbar where it belongs: along the top on a desktop, along the bottom (above the home
-## indicator, with the views shifted up to make room) on iOS and Android.
+## Put the toolbar where it belongs: along the bottom (above the home indicator, with the views shifted up to make room)
+## on phones and for the native bar, along the top for Godot's own bar on a desktop.
 func _place_toolbar() -> void:
 	var ins := _insets()
-	if Layout.is_phone():
+	if _toolbar_at_bottom():
 		var bar_h := _phone_toolbar_height()
 		_content.offset_top = ins.y
 		_content.offset_bottom = -(bar_h + ins.w)
+		if _toolbar_bar == null:
+			return      # the native bar is not a Godot control and places itself
 		_toolbar_bar.anchor_left = 0.0
 		_toolbar_bar.anchor_right = 1.0
 		_toolbar_bar.anchor_top = 1.0
@@ -603,7 +662,7 @@ func _place_toolbar() -> void:
 		_toolbar_style.border_width_bottom = 0
 		_toolbar_style.border_width_top = 1
 		_toolbar_style.content_margin_bottom = 4 + ins.w   # the bar reaches the screen edge, behind the home indicator
-	else:
+	elif _toolbar_bar != null:
 		_toolbar_bar.anchor_left = 0.0
 		_toolbar_bar.anchor_right = 1.0
 		_toolbar_bar.anchor_top = 0.0
@@ -615,10 +674,10 @@ func _place_toolbar() -> void:
 
 ## Recompute the positions that depend on the safe-area insets (after the phone is rotated).
 func _relayout() -> void:
-	if not Layout.is_phone():
-		return
 	var ins := _insets()
 	_place_toolbar()
+	if not Layout.is_phone():
+		return
 	_fps_label.offset_right = -14 - ins.z
 	var bottom_gap := 12.0 * Layout.ui_scale()
 	_status.offset_bottom = -bottom_gap
@@ -634,7 +693,8 @@ func _apply_view_type() -> void:
 	for key in _view_buttons.keys():
 		var b: Button = _view_buttons[key]
 		b.icon = b.get_meta("selected") if key == view else b.get_meta("normal")
-	_lock_button.icon = load(ICON_DIR + ("LockWorldIcon" if Settings.get_bool("world_locked") else "UnlockWorldIcon") + ".png")
+	if _lock_button != null:
+		_lock_button.icon = load(ICON_DIR + ("LockWorldIcon" if Settings.get_bool("world_locked") else "UnlockWorldIcon") + ".png")
 	# The time label is at the top on every map.
 	_time_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	_time_label.offset_top = 8
@@ -774,8 +834,4 @@ func _open_for_test(what: String) -> void:
 		"click": _on_location_clicked(35.0, -100.0)
 	if _native_snap != "" and NativeUI.is_open():
 		get_tree().create_timer(2.0).timeout.connect(func() -> void: NativeUI._call("debug_snapshot", _native_snap))
-		get_tree().create_timer(3.5).timeout.connect(get_tree().quit)
-	elif _native_snap != "" and _open_on_start == "toolbar":
-		# development: a picture of the native button bar
-		get_tree().create_timer(2.0).timeout.connect(func() -> void: NativeUI._call("debug_toolbar_snapshot", _native_snap))
 		get_tree().create_timer(3.5).timeout.connect(get_tree().quit)

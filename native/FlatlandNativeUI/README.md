@@ -19,7 +19,7 @@ Settings.changed   ── updateValue(key,json) ──▶ the sheet shows change
   while `prefs_dialog.gd` builds the Godot dialog; `NativeUI` sends that record as JSON. Nothing is
   defined twice, so the Godot dialog (desktop, Android, and the iOS fallback) and the native one cannot
   drift apart.
-* `NativeUI.wanted()` is true on iOS (or with `-- --native-ui` on macOS) when the extension is loaded.
+* `NativeUI.wanted()` is true on iOS and macOS when the extension is loaded.
   `main.gd` then shows the native screen; otherwise it shows the Godot dialog as before.
 
 ## Building
@@ -57,8 +57,8 @@ Libraries* and *Embed Frameworks* (the SwiftGodot Apple template documents this 
 
 ## Trying it on the Mac
 
-`godot --path . -- --native-ui --open=native` opens the native window; `-- --native-ui` alone makes the
-Preferences button use it.
+Run the project from Godot: the button bar is along the bottom of the window and Preferences opens the native window.
+`godot --path . -- --open=prefs` opens it at start-up.
 
 ## Status
 

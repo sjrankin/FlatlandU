@@ -40,6 +40,7 @@ const DEFAULTS := {
 	"show_heritage_sites": false,
 	"show_user_pois": false,
 	"show_sun": true,
+	"show_moon": true,
 	"show_grid": true,
 	"show_equator": true,
 	"show_polar_circles": true,

@@ -2,7 +2,7 @@ import SwiftUI
 
 // Puts the SwiftUI button bar on screen.
 //   iOS:   a view along the bottom edge of Godot's view, over it, reaching down behind the home indicator.
-//   macOS: a small window of its own (a development aid; the Mac app keeps its Godot toolbar at the top).
+//   macOS: a view along the bottom edge of Godot's window, over it (the window has no bottom safe area).
 // Both report the bar's height, in pixels and without the bottom safe area, through `onHeight`.
 
 #if os(iOS)
@@ -54,8 +54,6 @@ final class ToolbarPresenter {
         bar.removeFromParent()
         onHeight(0)
     }
-
-    func snapshot(to path: String) {}
 
     private static func rootViewController() -> UIViewController? {
         let windows = UIApplication.shared.connectedScenes
@@ -120,38 +118,82 @@ import AppKit
 @MainActor
 final class ToolbarPresenter {
     var onHeight: (Int) -> Void = { _ in }
+    private var model: ToolbarModel?
     private var window: NSWindow?
+    private var bar: NSHostingView<ToolbarView>?
+    private var heightConstraint: NSLayoutConstraint?
+    private var observer: NSObjectProtocol?
+    private var lastPixels = -1
 
     func show(model: ToolbarModel) {
-        guard window == nil else { return }
-        let width: CGFloat = 800
-        let layout = ToolbarModel.layout(width: width, count: model.buttons.count)
-        model.columns = layout.columns
-        let height = ToolbarModel.height(rows: layout.rows)
-        let window = NSWindow(contentViewController: NSHostingController(rootView: ToolbarView(model: model)))
-        window.title = "Flatland Toolbar"
-        window.styleMask = [.titled]
-        window.setContentSize(NSSize(width: width, height: height))
-        window.setFrameOrigin(NSPoint(x: 40, y: 80))
-        window.orderFront(nil)
+        guard bar == nil else { return }
+        self.model = model
+        attach(triesLeft: 40)
+    }
+
+    /// Godot may call before its window is on screen; try again for a few seconds.
+    private func attach(triesLeft: Int) {
+        guard bar == nil, let model else { return }
+        guard let window = Self.godotWindow(), let content = window.contentView else {
+            guard triesLeft > 0 else { return }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(250))
+                self?.attach(triesLeft: triesLeft - 1)
+            }
+            return
+        }
+        let hosting = NSHostingView(rootView: ToolbarView(model: model))
+        hosting.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(hosting)
+        let height = hosting.heightAnchor.constraint(equalToConstant: ToolbarModel.height(rows: 1))
+        NSLayoutConstraint.activate([
+            hosting.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            hosting.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            hosting.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            height,
+        ])
         self.window = window
-        onHeight(Int(height))
+        bar = hosting
+        heightConstraint = height
+        // The number of rows depends on the window's width, so lay out again whenever it changes.
+        observer = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.relayout() }
+        }
+        model.onButtonsChanged = { [weak self] in self?.relayout() }
+        relayout()
+    }
+
+    /// Chooses the number of rows for the window's width, sizes the bar to them and reports the height in pixels.
+    private func relayout() {
+        guard let model, let window, let content = window.contentView, let heightConstraint else { return }
+        let layout = ToolbarModel.layout(width: content.bounds.width, count: model.buttons.count)
+        if model.columns != layout.columns { model.columns = layout.columns }
+        let height = ToolbarModel.height(rows: layout.rows)
+        if abs(heightConstraint.constant - height) > 0.5 { heightConstraint.constant = height }
+        let pixels = Int((height * window.backingScaleFactor).rounded())
+        if pixels != lastPixels {
+            lastPixels = pixels
+            onHeight(pixels)
+        }
     }
 
     func hide() {
-        window?.close()
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+        bar?.removeFromSuperview()
+        bar = nil
+        model = nil          // a pending attach() retry then does nothing
         window = nil
+        lastPixels = -1
         onHeight(0)
     }
 
-    /// Development aid: a picture of just the toolbar window.
-    func snapshot(to path: String) {
-        guard let window else { return }
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        task.arguments = ["-x", "-o", "-l", String(window.windowNumber), path]
-        try? task.run()
-        task.waitUntilExit()
+    /// Godot's own window: not one of the windows this extension opens for its screens.
+    private static func godotWindow() -> NSWindow? {
+        // NSApp is still nil if Godot has not created the application object yet.
+        guard let app = NSApp as NSApplication? else { return nil }
+        let candidates = app.windows.filter { $0.isVisible && $0.canBecomeMain }
+        return candidates.first { String(describing: type(of: $0)).contains("Godot") } ?? candidates.first
     }
 }
 #endif

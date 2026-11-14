@@ -138,14 +138,6 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
-    /// Development aid (macOS): save a picture of the button bar's window to `path`.
-    @Callable
-    func debugToolbarSnapshot(path: String) {
-        DispatchQueue.main.async { [self] in
-            MainActor.assumeIsolated { toolbarPresenter?.snapshot(to: path) }
-        }
-    }
-
     /// Development aid: make the same edit a tap in the screen would (goes through the model, so
     /// value_changed is emitted), to test the Swift -> Godot path without clicking.
     @Callable

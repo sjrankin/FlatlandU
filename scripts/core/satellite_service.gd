@@ -243,6 +243,8 @@ func positions(unix: float) -> Array:
 		var ahead := position_of(id, unix + 10.0)
 		out.append({
 			"id": id, "label": str(entry[1]), "lat": here["lat"], "lon": here["lon"], "alt_km": here["alt_km"],
-			"next_lat": ahead["lat"], "next_lon": ahead["lon"],
+			# Longitude continued past +-180 rather than wrapped, so the pair never straddles the map edge and the
+			# heading computed from it stays right while a satellite crosses the date line.
+			"next_lat": ahead["lat"], "next_lon": float(here["lon"]) + wrapf(float(ahead["lon"]) - float(here["lon"]), -180.0, 180.0),
 		})
 	return out

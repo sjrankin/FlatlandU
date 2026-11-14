@@ -32,6 +32,9 @@ var _orbit: Node3D                  # camera pivot
 var _camera: Camera3D
 var _sun: DirectionalLight3D
 var _moon: DirectionalLight3D
+var _moon_body: MeshInstance3D       # the Moon itself, at its true distance and size (not the cyan moon light)
+var _moon_distance := Lunar.MEAN_DISTANCE_KM / Geo.EARTH_KM * R
+const MOON_LAYER := 1 << 2           # only the sun lights the Moon, not the cyan moon light
 var _env: Environment
 var _sky_mesh: MeshInstance3D       # star field sphere (with the sun) centred on the camera
 var _sky_mat: ShaderMaterial
@@ -68,6 +71,8 @@ const NIGHT_LAYER := 1 << 1   # night-side objects: not lit by the sun
 var _tap_start := Vector2.ZERO
 const TAP_SLOP := 6.0   # pixels a tap may move and still count as a tap
 var _last_hour_stamp := -1
+var _quake_nodes: Dictionary = {}   # quake id -> {group: Node3D holding all its nodes, indicator: Node3D or null}
+var _indicator_parent: Node3D       # where _add_quake_indicator puts what it builds
 var _tick := 0.0
 var _attract_angle := 0.0
 var _earth_angle := 0.0
@@ -79,7 +84,7 @@ func _ready() -> void:
 	_build_scene()
 	Settings.changed.connect(_on_setting_changed)
 	MapCatalog.texture_ready.connect(_on_texture_ready)
-	QuakeService.quakes_updated.connect(func(_q: Array) -> void: _rebuild_quakes())
+	QuakeService.quakes_updated.connect(func(_q: Array) -> void: _sync_quakes())
 	CityDB.user_data_changed.connect(func() -> void:
 		_rebuild_pois()
 		_rebuild_regions()
@@ -173,8 +178,7 @@ func _build_scene() -> void:
 
 	_build_poles()
 	_build_cube()
-	if Settings.get_bool("show_intro"):
-		show_intro()
+	# The welcome text is started by `start_intro` once the rest of the start-up work is done, so it does not stall.
 
 	_sun = DirectionalLight3D.new()
 	_sun.light_energy = 0.8
@@ -192,7 +196,9 @@ func _build_scene() -> void:
 	_moon = DirectionalLight3D.new()
 	_moon.light_energy = 0.1
 	_moon.light_color = Color.CYAN
+	_moon.light_cull_mask = 0xFFFFF & ~MOON_LAYER
 	add_child(_moon)
+	_build_moon()
 
 	_orbit = Node3D.new()
 	_orbit.name = "Orbit"
@@ -205,6 +211,36 @@ func _build_scene() -> void:
 	_orbit.add_child(_camera)
 	_camera.current = true
 	_build_sky()
+
+## The Moon: a sphere of its true size (0.27 Earth diameters) at its true distance (about 60 Earth radii), textured with the
+## lunar map, its near side turned to the Earth. The sun lights it, so its phase is right without any extra work.
+func _build_moon() -> void:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = load("res://Assets/Moon/LROMoon.png")
+	mat.roughness = 1.0
+	mat.metallic = 0.0
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	_moon_body = MeshInstance3D.new()
+	_moon_body.name = "Moon"
+	_moon_body.mesh = _make_sphere_mesh(Lunar.RADIUS_KM / Geo.EARTH_KM * R, 96, 48)
+	_moon_body.material_override = mat
+	_moon_body.layers = MOON_LAYER
+	_moon_body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_moon_body.visible = Settings.get_bool("show_moon")
+	add_child(_moon_body)
+
+## Puts the Moon where it is in the sky of the Earth system (the same frame the stars use) and turns it to face the Earth.
+func _place_moon(now: float) -> void:
+	if _moon_body == null:
+		return
+	var pos := Lunar.position(now)
+	_moon_distance = float(pos["distance_km"]) / Geo.EARTH_KM * R
+	var dir := (_stars_basis * Lunar.equatorial_direction(pos)).normalized()
+	var toward_earth := -dir
+	var pole := _stars_basis * Lunar.pole_direction()
+	var up := (pole - toward_earth * pole.dot(toward_earth)).normalized()
+	_moon_body.transform = Transform3D(Basis(up.cross(toward_earth), up, toward_earth), dir * _moon_distance)
+	_apply_camera()
 
 func _child(parent: Node, node_name: String) -> Node3D:
 	var n := Node3D.new()
@@ -297,6 +333,9 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 		"hour_type", "home_latitude", "home_longitude":
 			_last_hour_stamp = -1
 			_rebuild_hours()
+		"show_moon":
+			_moon_body.visible = Settings.get_bool("show_moon")
+			_apply_camera()
 		"show_moon_light":
 			_moon.visible = Settings.get_bool("show_moon_light")
 			_update_time(false)
@@ -1068,33 +1107,74 @@ func _rebuild_hours() -> void:
 ## arrow, sphere, pulsating sphere, pyramid, cone, box, cylinder, capsule or tethered magnitude.
 ## Each has the magnitude written on the surface, and quakes inside the "recent" window get the
 ## chosen new-earthquake indicator.
+## Throws every quake away and builds them again. Only for a change that affects how all of them look (shape, size, filters,
+## the enabled switch); a feed update goes through `_sync_quakes`, which touches only the quakes that came or went.
 func _rebuild_quakes() -> void:
 	_clear(_quakes_node)
 	_dn_items = _dn_items.filter(func(i): return not (is_instance_valid(i["node"]) and i["node"].get_parent() != null and _quakes_node.is_ancestor_of(i["node"])))
 	_arrows.clear()
-	if not Settings.get_bool("enable_earthquakes"):
-		return
+	_quake_nodes.clear()
+	_sync_quakes()
+
+## Brings the drawn quakes in line with the quake list: builds the ones that are new, removes the ones no longer shown, and
+## adds or removes the "new quake" indicator as a quake becomes recent or stops being so. Nothing else is rebuilt.
+func _sync_quakes() -> void:
+	var wanted: Dictionary = {}
+	if Settings.get_bool("enable_earthquakes"):
+		for q in QuakeService.visible_quakes():
+			wanted[str(q["id"])] = q
+	for id in _quake_nodes.keys():
+		if not wanted.has(id):
+			_remove_quake(id)
 	var now := Time.get_unix_time_from_system()
 	var recent_s := Settings.get_float("quake_recent_hours") * 3600.0
-	for q in QuakeService.visible_quakes():
-		var mag: float = q["magnitude"]
-		var lat: float = q["lat"]
-		var lon: float = q["lon"]
-		var col := QuakeService.magnitude_color(mag)
-		var holder := _make_quake_shape(q, col)
-		if holder != null:
-			_quakes_node.add_child(holder)
-		# Magnitude text lying on the surface.
-		var s := "%.2f" % mag
-		if s.ends_with("0"):
-			s = s.left(-1)
-		var em := 0.05 * (7.0 + mag)
-		var radial := R + 0.3 + (mag / 10.0) * 0.7
-		var t := _flat_text("M" + s, lat, lon, radial, em, 0.15, true, Geo.quake_font())
-		_quakes_node.add_child(t)
-		_register_dn(t, lat, lon, col, col)
-		if Settings.get_bool("quake_highlight_new") and now - float(q["time"]) <= recent_s:
+	var highlight := Settings.get_bool("quake_highlight_new")
+	for id in wanted:
+		var q: Dictionary = wanted[id]
+		if not _quake_nodes.has(id):
+			_quake_nodes[id] = {"group": _build_quake(q), "indicator": null}
+		var entry: Dictionary = _quake_nodes[id]
+		var recent := highlight and now - float(q["time"]) <= recent_s
+		if recent and entry["indicator"] == null:
+			var holder := Node3D.new()
+			(entry["group"] as Node3D).add_child(holder)
+			_indicator_parent = holder
 			_add_quake_indicator(q)
+			entry["indicator"] = holder
+		elif not recent and entry["indicator"] != null:
+			_discard_nodes(entry["indicator"])
+			entry["indicator"] = null
+
+func _build_quake(q: Dictionary) -> Node3D:
+	var group := Node3D.new()
+	_quakes_node.add_child(group)
+	var mag: float = q["magnitude"]
+	var lat: float = q["lat"]
+	var lon: float = q["lon"]
+	var col := QuakeService.magnitude_color(mag)
+	var holder := _make_quake_shape(q, col)
+	if holder != null:
+		group.add_child(holder)
+	# Magnitude text lying on the surface.
+	var s := "%.2f" % mag
+	if s.ends_with("0"):
+		s = s.left(-1)
+	var em := 0.05 * (7.0 + mag)
+	var radial := R + 0.3 + (mag / 10.0) * 0.7
+	var t := _flat_text("M" + s, lat, lon, radial, em, 0.15, true, Geo.quake_font())
+	group.add_child(t)
+	_register_dn(t, lat, lon, col, col)
+	return group
+
+func _remove_quake(id: String) -> void:
+	_discard_nodes(_quake_nodes[id]["group"])
+	_quake_nodes.erase(id)
+
+## Frees a node and forgets the day/night and spinning-arrow entries that point into it.
+func _discard_nodes(node: Node3D) -> void:
+	_dn_items = _dn_items.filter(func(i): return is_instance_valid(i["node"]) and not node.is_ancestor_of(i["node"]))
+	_arrows = _arrows.filter(func(i): return is_instance_valid(i["node"]) and not node.is_ancestor_of(i["node"]))
+	node.queue_free()
 
 func _quake_basis(lat: float, lon: float) -> Basis:
 	var b := Geo.surface_basis(lat, lon)
@@ -1288,7 +1368,7 @@ func _add_quake_indicator(q: Dictionary) -> void:
 	match kind:
 		"Static Ring", "Animated Ring":
 			var holder := _up_node(lat, lon, R + 0.3)
-			_quakes_node.add_child(holder)
+			_indicator_parent.add_child(holder)
 			var mi := MeshInstance3D.new()
 			mi.mesh = ring
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1308,7 +1388,7 @@ func _add_quake_indicator(q: Dictionary) -> void:
 			rr.inner_radius = 0.75
 			rr.outer_radius = 1.05
 			var holder := _up_node(lat, lon, R + 0.02)
-			_quakes_node.add_child(holder)
+			_indicator_parent.add_child(holder)
 			var mi := MeshInstance3D.new()
 			mi.mesh = rr
 			var rmat := StandardMaterial3D.new()
@@ -1329,7 +1409,7 @@ func _add_quake_indicator(q: Dictionary) -> void:
 			rt.parallel().tween_property(rmat, "albedo_color:a", 0.0, 0.1).set_delay(dur - 0.1)
 		"Glowing Sphere":
 			var holder := _up_node(lat, lon, R)
-			_quakes_node.add_child(holder)
+			_indicator_parent.add_child(holder)
 			var mi := MeshInstance3D.new()
 			var sm := SphereMesh.new()
 			sm.radius = 0.75
@@ -1341,7 +1421,7 @@ func _add_quake_indicator(q: Dictionary) -> void:
 		"Triangle Ring Inward", "Triangle Ring Outward":
 			var holder := _up_node(lat, lon, R + 0.3)
 			holder.scale = Vector3.ONE * 0.41
-			_quakes_node.add_child(holder)
+			_indicator_parent.add_child(holder)
 			var spin := Node3D.new()
 			holder.add_child(spin)
 			var tri := PrismMesh.new()
@@ -1364,7 +1444,7 @@ func _add_quake_indicator(q: Dictionary) -> void:
 ## proportion to the magnitude.
 func _add_arrow_and_ring(lat: float, lon: float, mag: float) -> void:
 	var holder := _up_node(lat, lon, R + 0.02)
-	_quakes_node.add_child(holder)
+	_indicator_parent.add_child(holder)
 	var plain := Shapes.plain(Color("#ff2400"))
 	var ring_mesh := TorusMesh.new()
 	ring_mesh.outer_radius = 0.2 * mag
@@ -1437,6 +1517,7 @@ func _update_time(snap: bool) -> void:
 		# Star frame -> scene: spin so the sun's right ascension faces +Z, then apply the seasonal tilt.
 		_stars_basis = Basis(Vector3.RIGHT, decl) * Basis(Vector3.UP, -deg_to_rad(Solar.right_ascension(now)))
 		_place_stars()
+		_place_moon(now)
 	_system.rotation.x = decl          # tilt the Earth; the sun stays fixed behind the camera
 	var sun_dir := Vector3(0, 0, 1)
 	var lit_mats: Array[ShaderMaterial] = [_earth_mat, _sea_mat]
@@ -1501,6 +1582,9 @@ func _apply_camera() -> void:
 	var extra := 60.0 if Settings.get_bool("show_satellites") else 0.0
 	_camera.near = maxf(0.1, cam_z - 40.0 - extra)
 	_camera.far = cam_z + 40.0 + extra
+	if _moon_body != null and _moon_body.visible:
+		# The Moon is far out (about 600 units): reach it, and leave the star field just beyond it.
+		_camera.far = maxf(_camera.far, cam_z + _moon_distance + 20.0)
 	_sun.directional_shadow_max_distance = cam_z + 40.0
 	_update_hour_alpha()
 	if _sky_mesh != null:
@@ -1573,6 +1657,11 @@ func _update_satellites() -> void:
 			(item["label"] as Label3D).text = "%s  %s" % [item["name"], SatelliteService.format_altitude(float(s["alt_km"]))]
 	for id in _sat_items.keys():
 		((_sat_items[id] as Dictionary)["holder"] as Node3D).visible = shown.has(id)   # untracked: not shown
+
+## Shows the welcome text at start-up, if the setting says to.
+func start_intro() -> void:
+	if Settings.get_bool("show_intro"):
+		show_intro()
 
 func is_intro_showing() -> bool:
 	return is_instance_valid(_intro)

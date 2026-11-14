@@ -124,7 +124,7 @@ struct ScreenPageContent: View {
 
     private var blocks: [Block] {
         var out: [Block] = []
-        for item in items {
+        for item in items.dropFirst(banner == nil ? 0 : 1) {
             if item.kind == .section {
                 out.append(Block(id: out.count, title: item.title, items: []))
             } else {
@@ -135,17 +135,54 @@ struct ScreenPageContent: View {
         return out
     }
 
+    /// A picture first on the page (About) is shown as a band under the title bar, with the same space above and below it, instead
+    /// of as a row of the form (which keeps a wide gap below the title bar).
+    private var banner: ScreenItem? { items.first?.kind == .image ? items.first : nil }
+
     var body: some View {
+        VStack(spacing: 0) {
+            if let banner {
+                ScreenBanner(item: banner)
+            }
+            form
+        }
+    }
+
+    private var form: some View {
         Form {
             ForEach(blocks) { block in
-                Section(block.title ?? "") {
-                    ForEach(block.items) { item in
-                        ScreenRow(model: model, item: item)
-                    }
+                // A block without a heading gets no header at all: an empty one still leaves a gap above the rows.
+                if let title = block.title {
+                    Section(title) { rows(block) }
+                } else {
+                    Section { rows(block) }
                 }
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder private func rows(_ block: Block) -> some View {
+        ForEach(block.items) { item in
+            ScreenRow(model: model, item: item)
+        }
+    }
+}
+
+/// The picture at the top of a page.
+struct ScreenBanner: View {
+    let item: ScreenItem
+
+    var body: some View {
+        // AsyncImage reads and decodes the file off the main thread.
+        AsyncImage(url: URL(fileURLWithPath: item.path)) { image in
+            image.resizable().scaledToFit()
+        } placeholder: {
+            Color.clear
+        }
+        .frame(maxWidth: .infinity, maxHeight: 260)
+        .padding(.vertical, 8)
+        .background(Color.black)
     }
 }
 
@@ -182,6 +219,17 @@ struct ScreenRow: View {
             ParagraphView(item: item)
         case .row:
             ListRow(model: model, item: item)
+        case .image:
+            // AsyncImage reads and decodes the file off the main thread.
+            AsyncImage(url: URL(fileURLWithPath: item.path)) { image in
+                image.resizable().scaledToFit()
+            } placeholder: {
+                Color.clear
+            }
+            .frame(maxWidth: .infinity, maxHeight: 260)
+            .listRowBackground(Color.black)
+        case .link:
+            NavigationLink(item.title) { TextPage(title: item.pageTitle.isEmpty ? item.title : item.pageTitle, text: item.detail) }
         case .section:
             EmptyView()
         }

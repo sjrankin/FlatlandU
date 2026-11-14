@@ -8,7 +8,7 @@ extends Node
 ##   quake rings, satellites, attract mode). Touching the screen brings the chosen frame rate back at once.
 ## - Low Power Mode / heat: the native code reports the device's power state ("normal", "low_power", "thermal",
 ##   "critical"). With "follow_low_power" on, Low Power Mode or a hot device lowers the cap to 30 fps (20 when critical).
-## - Covered or in the background: while a native sheet covers the screen, or the app is not in front, Godot stops
+## - Covered or in the background: while a native sheet covers the screen, or (phones and tablets only) the app is not in front, Godot stops
 ##   drawing altogether (scripts and timers keep running, so the sheets still get fresh data).
 ## - Graphics quality: the "graphics_quality" setting (Auto, High, Medium, Low) sets the anti-aliasing and the
 ##   resolution the 3D views are drawn at, and whether 3D shadows are drawn. Auto is Medium on a phone, High elsewhere.
@@ -101,7 +101,9 @@ func _apply_quality() -> void:
 ## False while nothing is being drawn (a native sheet covers the screen, or the app is in the background);
 ## the 3D views skip their per-frame work then.
 func drawing() -> bool:
-	return not (_covered or _backgrounded)
+	# Losing focus only pauses drawing on phones and tablets, where it means the app left the screen. A desktop window
+	# that is merely behind another keeps animating.
+	return not (_covered or (_backgrounded and OS.has_feature("mobile")))
 
 ## A native sheet is (not) covering the screen: stop (resume) drawing underneath it.
 func set_covered(covered: bool) -> void:

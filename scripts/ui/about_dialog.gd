@@ -125,16 +125,36 @@ func _process(delta: float) -> void:
 
 # MARK: - Native (SwiftUI) version; see NativeUI
 
+## Android's screen has no pages that open within it, so there the licenses replace the About screen, with a button back.
 var _native_licenses := false
 
+## The picture at the top of the native About screen, as a file the native code can read (the project's own copy is inside the
+## app's package once exported). It is written again once each time the app starts, so a changed picture is picked up.
+static var _image_path := ""
+
+func _about_image_path() -> String:
+	if _image_path == "":
+		var path := OS.get_user_data_dir().path_join("about_image.png")
+		var img := (load("res://Assets/About/AboutImage.png") as Texture2D).get_image()
+		if img.is_compressed():
+			img.decompress()
+		img.save_png(path)
+		_image_path = path
+	return _image_path
+
 func native_screen() -> Dictionary:
-	if _native_licenses:
+	var licenses_text := "Noto Sans\n\n" + FileAccess.get_file_as_string("res://Assets/Fonts/NotoSans-OFL.txt")
+	var android := OS.get_name() == "Android"
+	if android and _native_licenses:
 		return {"screen": {"title": "Licenses", "pages": [{"title": "Licenses", "items": [
 			{"type": "paragraph", "title": "Noto Sans", "style": "headline"},
 			{"type": "paragraph", "title": FileAccess.get_file_as_string("res://Assets/Fonts/NotoSans-OFL.txt"), "style": "mono"},
 			{"type": "action", "id": "about", "title": "Back to About"}]}]}, "values": {}}
 	var version := str(ProjectSettings.get_setting("application/config/version", "1.0"))
-	return {"screen": {"title": "About Flatland", "pages": [{"title": "About", "items": [
+	var items: Array = []
+	if not android:
+		items.append({"type": "image", "path": _about_image_path()})
+	items.append_array([
 		{"type": "paragraph", "title": "Flatland", "style": "title"},
 		{"type": "info", "title": "Version", "detail": version},
 		{"type": "info", "title": "Build", "detail": "%d, %s" % [BuildInfo.build_number(), BuildInfo.timestamp()]},
@@ -142,8 +162,13 @@ func native_screen() -> Dictionary:
 		{"type": "section", "title": "Credits"},
 		{"type": "paragraph", "title": "Flatland was written by Stuart Rankin with design inspiration and assistance from Kees de Kok.\n© 2019 – 2026 Stuart Rankin"},
 		{"type": "paragraph", "title": "All images and sounds used in Flatland are, to the best of the author's knowledge, in the public domain."},
-		{"type": "paragraph", "title": "3D text uses Noto Sans, licensed under the SIL Open Font License 1.1.", "style": "caption"},
-		{"type": "action", "id": "licenses", "title": "Show Licenses"}]}]}, "values": {}}
+		{"type": "paragraph", "title": "3D text uses Noto Sans, licensed under the SIL Open Font License 1.1.", "style": "caption"}])
+	if android:
+		items.append({"type": "action", "id": "licenses", "title": "Show Licenses"})
+	else:
+		# A page that opens inside the screen, with the system's Back button to return to About.
+		items.append({"type": "link", "title": "Show Licenses", "page_title": "Licenses", "detail": licenses_text})
+	return {"screen": {"title": "About Flatland", "pages": [{"title": "About", "items": items}]}, "values": {}}
 
 func native_event(kind: String, key: String, _value: Variant) -> void:
 	if kind == "action":
