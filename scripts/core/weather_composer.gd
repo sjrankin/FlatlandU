@@ -1,5 +1,5 @@
 extends Node
-## Weather-satellite compositor: merges the whole-world pictures of GOES-West, GOES-East and Himawari into one picture
+## Weather-satellite compositor: merges the whole-world pictures of GOES-West, GOES-East, Meteosat (MTG) and Himawari into one picture
 ## by drawing them through `shaders/weather_composite.gdshader` into an off-screen SubViewport and reading the result
 ## back. Done on the GPU because blending 8 million pixels one by one in GDScript would take many seconds.
 ##
@@ -16,12 +16,14 @@ const HEIGHT := 2048
 const SLOTS := [
 	["GOES-West", "goes_west", "have_west"],
 	["GOES-East", "goes_east", "have_east"],
+	["MTG", "mtg", "have_mtg"],
 	["Himawari", "himawari", "have_himawari"],
+	["Himawari IR", "himawari_ir", "have_himawari_ir"],
 ]
 
 ## Composes the satellite pictures into one whole-world picture. This is a coroutine: call it with `await`.
 ##
-## [param images]: Dictionary of satellite name ("GOES-West", "GOES-East", "Himawari") to its whole-world [Image]. A
+## [param images]: Dictionary of satellite name ("GOES-West", "GOES-East", "MTG", "Himawari", "Himawari IR") to its whole-world [Image]. A
 ## satellite that is missing (failed to download) is left out; its area becomes base or black.
 ## [param base]: the picture to show behind and between the satellites in blend mode (the NOAA-21 map), or null.
 ## [param blend]: true to fade the satellites into [param base]; false to show only the satellites, with black where

@@ -2,7 +2,7 @@ extends Node
 ## Map catalog (autoload "MapCatalog"): the counterpart of Flatland's MapList/MapItem.
 ## A small set of maps is embedded in the app (res://Assets/BuiltIn) so it always works; the
 ## rest are loaded from res://Maps when present. Live NASA GIBS satellite maps are downloaded on demand: NOAA-21 (with
-## NOAA-20 as a fallback), a merged GOES-West / GOES-East / Himawari weather-satellite map, and a blend of the two.
+## NOAA-20 as a fallback), a merged GOES-West / GOES-East / Meteosat MTG / Himawari weather-satellite map, and a blend of the two.
 ## Images are loaded on a worker thread, turned into mip-mapped textures and cached.
 
 ## Emitted when a map image that was requested with [method request] has finished loading (or, for the live satellite
@@ -26,7 +26,7 @@ const BUILTIN_DIR := "res://Assets/BuiltIn/"
 ## Pseudo file name for the live NASA GIBS satellite map. The polar versions append "_north" or "_south". [method request]
 ## recognizes it by this prefix.
 const SAT_NAME := "@satellite"
-## Pseudo file name for the weather-satellite-only map (GOES-West, GOES-East and Himawari merged; black where none of
+## Pseudo file name for the weather-satellite-only map (GOES-West, GOES-East, Meteosat MTG and Himawari merged; black where none of
 ## them sees). The polar versions append "_north" or "_south".
 const WX_NAME := "@weather"
 ## Pseudo file name for the blended map: the weather satellites faded into the NOAA-21 map. Polar versions as above.
@@ -45,19 +45,47 @@ const SAT_SOURCES := [
 	["NOAA-21", "VIIRS_NOAA21_CorrectedReflectance_TrueColor"],
 	["NOAA-20", "VIIRS_NOAA20_CorrectedReflectance_TrueColor"],
 ]
-## The weather-satellite sources: [short name, GIBS layer]. GOES-West and GOES-East use GeoColor (true color by day,
-## infrared by night). GIBS has no GeoColor layer for Himawari, so its visible-light band is used (grayscale, and black on
-## its night side, which the compositor treats as "no data"). EUMETSAT (Meteosat) is not used yet, so the area from about
-## 1 degree west to 60 degrees east longitude has no weather-satellite data.
-const WX_SOURCES := [
-	["GOES-West", "GOES-West_ABI_GeoColor"],
-	["GOES-East", "GOES-East_ABI_GeoColor"],
-	["Himawari", "Himawari_AHI_Band3_Red_Visible_1km"],
-]
-## URL template for a weather-satellite picture: the whole world, 4096 by 2048 JPEG, the newest one GIBS has (no TIME
-## given). The `%s` is the GIBS layer.
-const WX_URL := "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1" \
+## URL template for a weather picture from NASA GIBS: the whole world, 4096 by 2048 JPEG, the newest one GIBS has (no
+## TIME given). The `%s` is the GIBS layer.
+const WX_GIBS_URL := "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1" \
 	+ "&LAYERS=%s&SRS=EPSG:4326&BBOX=-180,-90,180,90&WIDTH=4096&HEIGHT=2048&FORMAT=image/jpeg"
+## URL template for a weather picture from EUMETSAT's EUMETView service (no account needed): the whole world, 4096 by
+## 2048 JPEG. WMS 1.3.0 lists the box as south,west,north,east. The `%s` is the layer and `{time}` is replaced by
+## [method _wx_time_param]. The time is always given because the server's default picture is cached and can be stale. A
+## picture takes 2 to 15 seconds to come back, slower than GIBS.
+const WX_EUMETVIEW_URL := "https://view.eumetsat.int/geoserver/wms?service=WMS&version=1.3.0&request=GetMap" \
+	+ "&layers=%s&styles=&crs=EPSG:4326&bbox=-90,-180,90,180&width=4096&height=2048&format=image/jpeg&time={time}"
+## The weather-satellite sources: [short name, layer, URL template, whether an almost black picture means the download
+## failed]. The short names are also the keys [WeatherComposer] expects. GOES-West, GOES-East and MTG use GeoColor (true
+## color by day, infrared by night). GIBS has no GeoColor layer for Himawari, so its visible-light band is used
+## (grayscale, and black on its night side; a black Himawari picture is therefore normal when it is night over all of
+## its disk). The "Himawari IR" picture (infrared, colour-coded by cloud-top temperature) fills in that night side. Meteosat-9 over the Indian Ocean is not used. Longitudes of
+## the satellites are in `shaders/weather_composite.gdshader`.
+const WX_SOURCES := [
+	["GOES-West", "GOES-West_ABI_GeoColor", WX_GIBS_URL, true],
+	["GOES-East", "GOES-East_ABI_GeoColor", WX_GIBS_URL, true],
+	["MTG", "mtg_fd:rgb_geocolour", WX_EUMETVIEW_URL, true],
+	["Himawari", "Himawari_AHI_Band3_Red_Visible_1km", WX_GIBS_URL, false],
+	["Himawari IR", "Himawari_AHI_Band13_Clean_Infrared", WX_GIBS_URL, true],
+]
+## The satellites, as counted in the status text. "Himawari IR" is not one of them: it is a second picture from
+## Himawari, used on its night side (see [constant WX_SOURCES]).
+const WX_SATELLITES := ["GOES-West", "GOES-East", "MTG", "Himawari"]
+## How old (seconds) the EUMETView picture asked for is: the newest pictures are published about half an hour late, so
+## asking for "now" would give an empty picture. The server uses the nearest picture it has.
+const WX_EUMETVIEW_LAG := 2400
+## How many times a failed weather download is tried again. The NASA and EUMETSAT services sit in front of tile servers
+## that fail now and then (an error message or an empty picture), and a second try usually works. A retry of an
+## EUMETView picture asks for a picture one hour earlier per try, in case the newest one is missing.
+const WX_RETRIES := 4
+## Seconds to wait before the first retry; each further retry waits this much longer again (2, 4, 6 ... seconds), so a
+## struggling server has time to recover.
+const WX_RETRY_DELAY := 2.0
+## Seconds before a weather map that is missing a satellite is fetched again when it is asked for. Long enough that a
+## view which asks for the map each time a texture arrives cannot start a loop of downloads.
+const WX_INCOMPLETE_RETRY := 120.0
+## A weather picture counts as empty when fewer than this fraction of the sampled pixels are lit.
+const WX_BLANK_FRACTION := 0.02
 ## Weather pictures are saved and reused for this many seconds (the satellites send a new picture every 10 to 15
 ## minutes; GIBS lags by about half an hour).
 const WX_SLOT_SECONDS := 1800
@@ -102,6 +130,10 @@ var _wx_remaining := 0
 var _wx_downloading := false
 ## True when [member _wx_images] holds the finished set for the current half hour.
 var _wx_loaded := false
+## How many times each weather download (by index into [constant WX_SOURCES]) has been tried again.
+var _wx_tries: Array[int] = []
+## Why a weather satellite's picture is missing: satellite name to a short reason ("HTTP 503", "empty picture", ...).
+var _wx_errors: Dictionary = {}
 ## The weather map keys ([constant WX_NAME], [constant BLEND_NAME]) that were requested and are not finished yet.
 var _wx_wanted: Dictionary = {}
 ## The weather map keys being composed right now.
@@ -109,6 +141,8 @@ var _wx_composing: Dictionary = {}
 ## For each weather map key that has textures, the half-hour slot ([method _wx_slot]) its pictures came from, so an old
 ## map is renewed when asked for again later.
 var _live_slot: Dictionary = {}
+## For a weather map that is missing a satellite: the Unix time after which asking for it again fetches it again.
+var _live_retry_at: Dictionary = {}
 ## The compositor node.
 var _wx_composer: Node
 
@@ -405,7 +439,7 @@ func _polar_done(key: String, img: Image) -> void:
 	_cache[key] = tex
 	texture_ready.emit(key, tex)
 
-# MARK: - Live weather-satellite maps (GOES-West, GOES-East, Himawari)
+# MARK: - Live weather-satellite maps (GOES-West, GOES-East, Meteosat MTG, Himawari)
 
 ## The current half-hour slot, used to name saved weather pictures and to tell when a weather map has gone stale.
 ##
@@ -426,14 +460,16 @@ func _wx_cache_path(source: String, slot: int) -> String:
 ## [param file_name]: a name starting with [constant WX_NAME] or [constant BLEND_NAME] (equirectangular, "_north" or
 ## "_south").
 ## Returns: the texture if ready, otherwise null (it arrives through [signal texture_ready]). A map from an earlier
-## half hour is dropped and fetched again.
+## half hour, or one that is missing a satellite (after [constant WX_INCOMPLETE_RETRY]), is dropped and fetched again.
 func _request_weather(file_name: String) -> Texture2D:
 	var base := WX_NAME if file_name.begins_with(WX_NAME) else BLEND_NAME
 	if _live_slot.has(base):
-		if _live_slot[base] == _wx_slot():
+		var retry_due: bool = _live_retry_at.has(base) and Time.get_unix_time_from_system() >= _live_retry_at[base]
+		if _live_slot[base] == _wx_slot() and not retry_due:
 			return _cache.get(file_name)
-		# The pictures are older than half an hour: forget this map and fetch it again.
+		# The pictures are older than half an hour, or a satellite was missing: forget this map and fetch it again.
 		_live_slot.erase(base)
+		_live_retry_at.erase(base)
 		for suffix: String in ["", "_north", "_south"]:
 			_cache.erase(base + suffix)
 	if _cache.has(file_name):
@@ -447,7 +483,7 @@ func _request_weather(file_name: String) -> Texture2D:
 	_wx_start()
 	return null
 
-## Gets the three weather pictures: from the saved files of this half hour where they exist, otherwise downloading
+## Gets the weather pictures: from the saved files of this half hour where they exist, otherwise downloading
 ## them (all at once). Old saved weather pictures are deleted. When all are in, [method _wx_try_compose] runs.
 func _wx_start() -> void:
 	if _wx_loaded:
@@ -457,6 +493,10 @@ func _wx_start() -> void:
 		return
 	_wx_downloading = true
 	_wx_images.clear()
+	_wx_errors.clear()
+	_wx_tries.clear()
+	_wx_tries.resize(WX_SOURCES.size())
+	_wx_tries.fill(0)
 	var slot := _wx_slot()
 	for fname in DirAccess.get_files_at("user://"):
 		if fname.begins_with("weather_") and not fname.ends_with("_%d.jpg" % slot):
@@ -482,10 +522,47 @@ func _wx_start() -> void:
 		names.append(src[0])
 	satellite_progress.emit("Downloading weather satellite images (%s)…" % ", ".join(names), false)
 	for i in to_download:
-		_wx_http[i].request(WX_URL % WX_SOURCES[i][1])
+		_wx_request(i)
 
-## Handles the end of one weather download: keeps and saves the picture if it is good, and when the last download is
-## in, goes on to [method _wx_downloads_finished].
+## Starts (or repeats) the download of one weather picture.
+##
+## [param index]: the entry of [constant WX_SOURCES] to fetch.
+func _wx_request(index: int) -> void:
+	var src: Array = WX_SOURCES[index]
+	var url: String = (src[2] as String) % src[1]
+	url = url.replace("{time}", _wx_time_param(_wx_tries[index]))
+	_wx_http[index].request(url)
+
+## The `time` value for an EUMETView request.
+##
+## [param tries]: how many times this download has already been retried; each retry goes one hour further back, in case
+## the newest picture is missing on the server.
+## Returns: an ISO 8601 UTC time ([constant WX_EUMETVIEW_LAG] seconds ago, rounded down to the 10-minute scan times,
+## minus an hour per retry), like "2026-11-15T14:20:00Z".
+func _wx_time_param(tries: int) -> String:
+	var t := int(Time.get_unix_time_from_system()) - WX_EUMETVIEW_LAG - tries * 3600
+	t -= t % 600
+	return Time.get_datetime_string_from_unix_time(t) + "Z"
+
+## Whether a weather picture has (almost) nothing in it: samples a grid of pixels and checks that fewer than
+## [constant WX_BLANK_FRACTION] of them are lit.
+##
+## [param img]: the decoded picture.
+## Returns: true if it is empty.
+func _wx_is_blank(img: Image) -> bool:
+	var lit := 0
+	var total := 0
+	for y in range(0, img.get_height(), 32):
+		for x in range(0, img.get_width(), 32):
+			var c := img.get_pixel(x, y)
+			total += 1
+			if maxf(c.r, maxf(c.g, c.b)) > 0.03:
+				lit += 1
+	return total == 0 or float(lit) / float(total) < WX_BLANK_FRACTION
+
+## Handles the end of one weather download: keeps and saves the picture if it is good; otherwise tries once more (see
+## [constant WX_RETRIES], after a growing pause from [constant WX_RETRY_DELAY]) and then records the reason in [member _wx_errors]. When the last download is in, goes on to
+## [method _wx_downloads_finished].
 ##
 ## [param result]: the HTTPRequest result code.
 ## [param code]: the HTTP status code (200 means success).
@@ -494,14 +571,32 @@ func _wx_start() -> void:
 ## [param index]: which entry of [constant WX_SOURCES] this was (bound when the signal was connected).
 func _on_wx_downloaded(result: int, code: int, _h: PackedStringArray, body: PackedByteArray, index: int) -> void:
 	var source: String = WX_SOURCES[index][0]
-	if result == HTTPRequest.RESULT_SUCCESS and code == 200 and body.size() >= WX_MIN_BYTES:
-		var img := Image.new()
-		if img.load_jpg_from_buffer(body) == OK:
-			_wx_images[source] = img
-			var f := FileAccess.open(_wx_cache_path(source, _wx_slot()), FileAccess.WRITE)
-			if f != null:
-				f.store_buffer(body)
-				f.close()
+	var reason := ""
+	var img := Image.new()
+	if result != HTTPRequest.RESULT_SUCCESS:
+		reason = "no answer" if result == HTTPRequest.RESULT_TIMEOUT else "network error %d" % result
+	elif code != 200:
+		reason = "HTTP %d" % code
+	elif body.size() < WX_MIN_BYTES or img.load_jpg_from_buffer(body) != OK:
+		# A service that cannot draw the picture answers with an XML error report instead.
+		reason = "server error" if body.slice(0, 5).get_string_from_utf8() == "<?xml" else "not a picture"
+	elif WX_SOURCES[index][3] and _wx_is_blank(img):
+		reason = "empty picture"
+	if reason == "":
+		_wx_images[source] = img
+		var f := FileAccess.open(_wx_cache_path(source, _wx_slot()), FileAccess.WRITE)
+		if f != null:
+			f.store_buffer(body)
+			f.close()
+	elif _wx_tries[index] < WX_RETRIES:
+		_wx_tries[index] += 1
+		push_warning("Weather picture %s failed (%s); trying again." % [source, reason])
+		await get_tree().create_timer(WX_RETRY_DELAY * _wx_tries[index]).timeout
+		_wx_request(index)
+		return
+	else:
+		_wx_errors[source] = reason
+		push_warning("Weather picture %s failed (%s)." % [source, reason])
 	_wx_remaining -= 1
 	if _wx_remaining <= 0:
 		_wx_downloads_finished()
@@ -531,11 +626,15 @@ func _wx_try_compose() -> void:
 ## [param base]: [constant WX_NAME] (weather satellites only) or [constant BLEND_NAME] (faded into the NOAA-21 map).
 func _wx_compose(base: String) -> void:
 	var blend := base == BLEND_NAME
-	var count := _wx_images.size()
+	var count := 0
 	var missing: Array = []
-	for src: Array in WX_SOURCES:
-		if not _wx_images.has(src[0]):
-			missing.append(src[0])
+	for sat: String in WX_SATELLITES:
+		if _wx_images.has(sat) or (sat == "Himawari" and _wx_images.has("Himawari IR")):
+			count += 1
+		else:
+			missing.append(sat)
+	if not _wx_images.has("Himawari IR") and not missing.has("Himawari"):
+		missing.append("Himawari IR")
 	var img: Image = null
 	if count > 0 or blend:
 		img = await _wx_composer.compose(_wx_images, _sat_image if blend else null, blend)
@@ -549,13 +648,24 @@ func _wx_compose(base: String) -> void:
 		satellite_progress.emit("Weather satellite images could not be downloaded.", true)
 		return
 	_live_slot[base] = _wx_slot()
+	# A map that is missing a satellite may be fetched again after a couple of minutes (see [method _request_weather]);
+	# the saved pictures of the satellites that worked are reused.
+	if missing.is_empty():
+		_live_retry_at.erase(base)
+	else:
+		_live_retry_at[base] = Time.get_unix_time_from_system() + WX_INCOMPLETE_RETRY
 	var now := Time.get_datetime_dict_from_system(true)
 	var when := "%02d:%02d UTC" % [now["hour"], now["minute"]]
-	weather_status = "OK (%d of %d satellites, %s)" % [count, WX_SOURCES.size(), when]
+	weather_status = "OK (%d of %d satellites, %s)" % [count, WX_SATELLITES.size(), when]
 	_build_live_textures(base, img)
 	# Kept short: on a desktop the status bar clips a message that is wider than the window.
 	var text := "%s map ready (%d of %d satellites, %s); map switched." \
-		% ["NOAA-21 + weather" if blend else "Weather satellite", count, WX_SOURCES.size(), when]
+		% ["NOAA-21 + weather" if blend else "Weather satellite", count, WX_SATELLITES.size(), when]
 	if not missing.is_empty():
-		text += " Missing: %s." % ", ".join(missing)
+		# The problem goes first: on a desktop the status bar clips a message that is wider than the window.
+		var parts: Array = []
+		for m: String in missing:
+			parts.append("%s (%s)" % [m, _wx_errors.get(m, "no picture")])
+		text = "Weather map: %s unavailable. %d of %d satellites shown." % [", ".join(parts), count, WX_SATELLITES.size()]
+		weather_status += "; missing " + ", ".join(parts)
 	satellite_progress.emit(text, true)
