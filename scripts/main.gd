@@ -52,6 +52,9 @@ var _satellites: Window
 var _debugger: Window
 var _bg: ColorRect
 var _snapshot_dialog: FileDialog
+var _video_dialog: FileDialog
+var _video_button: Button
+var _recorder: Node                 # records the window to a movie (video_recorder.gd)
 var _snapshot_image: Image          # captured when the Snapshot button is pressed, saved when the dialog is confirmed
 var _whats_here: PopupPanel
 var _whats_here_label: RichTextLabel
@@ -100,6 +103,12 @@ func _ready() -> void:
 	_begin_startup_wait()
 	print("Native UI: %s (embedded in the editor: %s)" % ["used" if NativeUI.wanted() else "not used", Engine.is_embedded_in_editor()])
 	get_window().size_changed.connect(_relayout)   # the safe area changes when a phone is rotated
+	if _record_test != "":
+		get_tree().create_timer(2.0).timeout.connect(func() -> void:
+			_recorder.start(_record_test)
+			await get_tree().create_timer(4.0).timeout
+			await _recorder.stop()
+			get_tree().quit())
 	if _vantage == "flightreset":
 		_globe.set_camera_mode(GlobeScript.CamMode.FLIGHT)
 		get_tree().create_timer(0.5).timeout.connect(func() -> void: _globe.reset_view())
@@ -138,6 +147,8 @@ func _parse_command_line() -> void:
 				Settings.override(kv[0], int(kv[1]) if cur is int else (float(kv[1]) if cur is float else (kv[1] == "true" if cur is bool else kv[1])))
 		elif arg.begins_with("--cam="):
 			_cam_args = arg.substr(6).split_floats(",")
+		elif arg.begins_with("--record="):
+			_record_test = arg.substr(9)   # development: record 4 seconds to this file, then quit
 		elif arg.begins_with("--vantage="):
 			_vantage = arg.substr(10)   # development: moon, sun or lookmoon
 		elif arg.begins_with("--resize="):
@@ -317,6 +328,7 @@ const CTX_FLIGHT := 6
 
 var _context_menu: PopupMenu
 var _vantage := ""
+var _record_test := ""
 var _context_point := Vector2.ZERO    ## where in the globe view the menu was asked for
 
 ## The menu for the 3D views: right click on a desktop, a long press on a phone or tablet. Choosing outside it closes it.
@@ -500,6 +512,7 @@ func _build_godot_toolbar() -> void:
 		Settings.set_value("world_locked", not Settings.get_bool("world_locked")))
 	_icon_button("ResetViewIcon", "Reset View", "Reset the 3D view.", _action_reset_view)
 	_icon_button("CameraButtonUnpressed", "Snapshot", "Take a snapshot of the view.", _action_snapshot)
+	_video_button = _icon_button("VideoIcon", "Record", "Record a video of the view; press again to stop.", _action_video)
 	_icon_button("EarthquakeIcon", "Earthquakes", "Show the list of earthquakes.", _action_quake_list)
 	_welcome_button = _icon_button("GlobeIcon", "Welcome", "Show or hide the welcome text.", _globe.toggle_intro)
 	_build_more_button()
@@ -530,6 +543,19 @@ func _build_dialogs() -> void:
 	_snapshot_dialog.title = "Save Snapshot"
 	_snapshot_dialog.file_selected.connect(_save_snapshot)
 	add_child(_snapshot_dialog)
+	_video_dialog = FileDialog.new()
+	_video_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+	_video_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_video_dialog.filters = PackedStringArray(["*.mov ; QuickTime movie"])
+	_video_dialog.title = "Save Video"
+	_video_dialog.file_selected.connect(_start_video)
+	add_child(_video_dialog)
+	_recorder = load("res://scripts/core/video_recorder.gd").new()
+	add_child(_recorder)
+	_recorder.recording_changed.connect(_update_video_button)
+	_recorder.finished.connect(func(path: String, frames: int, seconds: float) -> void:
+		_status.post("Video saved to %s (%d frames, %.1f seconds)" % [path, frames, seconds], 6.0))
+	_recorder.failed.connect(func(reason: String) -> void: _status.post("Could not record the video: " + reason, 6.0))
 
 # MARK: - Actions (names follow Flatland's IBActions)
 
@@ -585,6 +611,43 @@ func _action_snapshot() -> void:
 	if start_dir != "":
 		_snapshot_dialog.current_dir = start_dir
 	_snapshot_dialog.popup_centered_ratio(0.6)
+
+## The Record button starts a recording (after asking where to save it) and stops the one in progress.
+func _action_video() -> void:
+	if _recorder.is_recording():
+		_recorder.stop()
+		return
+	var d := Time.get_datetime_dict_from_system()
+	var file := "Flatland Video %04d-%02d-%02d %02d.%02d.%02d.mov" % [d["year"], d["month"], d["day"], d["hour"], d["minute"], d["second"]]
+	var start_dir := Settings.get_string("video_dir")
+	if start_dir == "" or not DirAccess.dir_exists_absolute(start_dir):
+		start_dir = OS.get_system_dir(OS.SYSTEM_DIR_MOVIES)
+	if Layout.is_phone():
+		# No file dialog on a phone or tablet: the movie goes straight to the Movies folder (the app's own folder if there is none).
+		if start_dir == "" or not DirAccess.dir_exists_absolute(start_dir):
+			start_dir = OS.get_user_data_dir()
+		_start_video(start_dir.path_join(file))
+		return
+	_video_dialog.current_file = file
+	if start_dir != "":
+		_video_dialog.current_dir = start_dir
+	_video_dialog.popup_centered_ratio(0.6)
+
+func _start_video(path: String) -> void:
+	if not path.to_lower().ends_with(".mov"):
+		path += ".mov"
+	Settings.set_value("video_dir", path.get_base_dir())
+	# Let the dialog finish closing first, so it is not in the first pictures.
+	for i in range(3):
+		await get_tree().process_frame
+	if _recorder.start(path):
+		_status.post("Recording… press Record again to stop.", 4.0)
+
+func _update_video_button(recording: bool) -> void:
+	if _video_button != null:
+		_video_button.icon = load(ICON_DIR + ("VideoRecordingIcon" if recording else "VideoIcon") + ".png")
+		_video_button.text = "Stop" if recording else "Record"
+	NativeUI.refresh_toolbar()
 
 func _save_snapshot(path: String) -> void:
 	if _snapshot_image != null and _snapshot_image.save_png(path) == OK:
@@ -685,6 +748,9 @@ func native_toolbar() -> Array:
 		{"id": "lock", "title": "Lock", "symbol": "lock.fill" if Settings.get_bool("world_locked") else "lock.open"},
 		{"id": "reset", "title": "Reset View", "symbol": "arrow.counterclockwise"},
 		{"id": "snapshot", "title": "Snapshot", "symbol": "camera"},
+		{"id": "video", "title": "Stop" if _recorder != null and _recorder.is_recording() else "Record",
+			"symbol": "stop.circle.fill" if _recorder != null and _recorder.is_recording() else "video",
+			"selected": _recorder != null and _recorder.is_recording()},
 		{"id": "quakes", "title": "Earthquakes", "symbol": "waveform.path.ecg"},
 		{"id": "welcome", "title": "Welcome", "symbol": "globe", "selected": _globe.is_intro_showing()},
 		{"id": "more", "title": "More", "symbol": "ellipsis.circle", "menu": [
@@ -703,6 +769,7 @@ func native_toolbar_event(id: String) -> void:
 		"lock": Settings.set_value("world_locked", not Settings.get_bool("world_locked"))
 		"reset": _action_reset_view()
 		"snapshot": _action_snapshot()
+		"video": _action_video()
 		"quakes": _action_quake_list()
 		"welcome": _globe.toggle_intro()
 		"times": _on_more_menu(1)

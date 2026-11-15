@@ -110,6 +110,8 @@ const NIGHT_LAYER := 1 << 1   # night-side objects: not lit by the sun
 var _tap_start := Vector2.ZERO
 const TAP_SLOP := 6.0   # pixels a tap may move and still count as a tap
 var _last_hour_stamp := -1
+var _hour_items: Array = []           # the 24 hour labels, each {node, parent}
+var _hours_stale := 0                 # how many wall-clock labels still need renewing after the minute changed
 var _sun_point: MeshInstance3D       # the ball under the sun (SolarLunarMarker)
 var _moon_point: MeshInstance3D      # the ball under the moon
 var _quake_nodes: Dictionary = {}   # quake id -> {group: Node3D holding all its nodes, indicator: Node3D or null}
@@ -691,6 +693,11 @@ func _refresh_day_night() -> void:
 	for it in _dn_items:
 		if is_instance_valid(it["node"]):
 			var day_now := Solar.is_daylight(it["lat"], it["lon"], now)
+			# Only an object that has crossed the terminator is touched: changing the material or the render layer of
+			# every object each minute made the whole scene re-prepare, a visible half-second hitch.
+			if it.get("is_day") == day_now:
+				continue
+			it["is_day"] = day_now
 			it["node"].material_override = it["day"] if day_now else it["night"]
 			_set_night_layer(it["node"], not day_now)
 
@@ -1138,39 +1145,64 @@ func _update_hour_alpha() -> void:
 func _rebuild_hours() -> void:
 	_clear(_hours_earth)
 	_clear(_hours_fixed)
-	var kind := Settings.get_string("hour_type")
-	if kind == Settings.HOURS_NONE:
+	_hour_items.clear()
+	_hours_stale = 0
+	if Settings.get_string("hour_type") == Settings.HOURS_NONE:
 		return
 	var utc := Solar.now()
-	var utc_hours := fposmod(utc, 86400.0) / 3600.0
 	for k in range(-12, 12):
-		var text := ""
-		var parent: Node3D = _hours_fixed
-		var lon := 15.0 * k
-		match kind:
-			Settings.HOURS_NOON:
-				text = "+0" if k == 0 else ("%+d" % k).replace("-", "−")
-			Settings.HOURS_SOLAR:
-				text = "%02d:00" % int(posmod(12 + k, 24))
-			Settings.HOURS_WALL:
-				# Meridians turn with the Earth; each shows the wall-clock time there.
-				parent = _hours_earth
-				var h := fposmod(utc_hours + lon / 15.0, 24.0)
-				text = "%d:%02d" % [int(h), int((h - floor(h)) * 60.0)]
-			Settings.HOURS_LOCATION:
-				parent = _hours_earth
-				var home_lon := Settings.get_float("home_longitude")
-				lon = wrapf(home_lon + 15.0 * k, -180.0, 180.0)
-				text = "Home" if k == 0 else ("%+d" % k).replace("-", "−")
-		var mi := _hour_mesh(text, 1.0)
-		var basis := Geo.surface_basis(0.0, lon)
-		# Text reads along the meridian (top to bottom), as in Flatland.
-		basis = basis * Basis(Vector3.BACK, deg_to_rad(-90.0))
-		mi.transform = Transform3D(basis, Geo.to_vec3(0.0, lon, HOUR_RADIUS))
-		parent.add_child(mi)
-		# Fixed labels sit in the sun's frame (the sun is at longitude 0); wall-clock and home labels turn with the Earth.
-		var label_night := not Solar.is_daylight(0.0, lon, utc) if parent == _hours_earth else absf(wrapf(lon, -180.0, 180.0)) > 90.0
-		_set_night_layer(mi, label_night)
+		var label := _make_hour_label(k, utc)
+		(label["parent"] as Node3D).add_child(label["node"])
+		_hour_items.append(label)
+
+## One hour label (k is -12 to 11, the 15 degree step from the sun's, or the home, meridian): returns {node, parent}.
+func _make_hour_label(k: int, utc: float) -> Dictionary:
+	var kind := Settings.get_string("hour_type")
+	var utc_hours := fposmod(utc, 86400.0) / 3600.0
+	var text := ""
+	var parent: Node3D = _hours_fixed
+	var lon := 15.0 * k
+	match kind:
+		Settings.HOURS_NOON:
+			text = "+0" if k == 0 else ("%+d" % k).replace("-", "−")
+		Settings.HOURS_SOLAR:
+			text = "%02d:00" % int(posmod(12 + k, 24))
+		Settings.HOURS_WALL:
+			# Meridians turn with the Earth; each shows the wall-clock time there.
+			parent = _hours_earth
+			var h := fposmod(utc_hours + lon / 15.0, 24.0)
+			text = "%d:%02d" % [int(h), int((h - floor(h)) * 60.0)]
+		Settings.HOURS_LOCATION:
+			parent = _hours_earth
+			var home_lon := Settings.get_float("home_longitude")
+			lon = wrapf(home_lon + 15.0 * k, -180.0, 180.0)
+			text = "Home" if k == 0 else ("%+d" % k).replace("-", "−")
+	var mi := _hour_mesh(text, 1.0)
+	var basis := Geo.surface_basis(0.0, lon)
+	# Text reads along the meridian (top to bottom), as in Flatland.
+	basis = basis * Basis(Vector3.BACK, deg_to_rad(-90.0))
+	mi.transform = Transform3D(basis, Geo.to_vec3(0.0, lon, HOUR_RADIUS))
+	# Fixed labels sit in the sun's frame (the sun is at longitude 0); wall-clock and home labels turn with the Earth.
+	var label_night := not Solar.is_daylight(0.0, lon, utc) if parent == _hours_earth else absf(wrapf(lon, -180.0, 180.0)) > 90.0
+	_set_night_layer(mi, label_night)
+	return {"node": mi, "parent": parent}
+
+## Wall-clock labels show new minutes every minute. Making all 24 3D labels at once froze the view for about half a second,
+## so they are renewed one per frame instead (the old label is replaced by the new one in the same frame).
+func _renew_next_hour() -> void:
+	if _hours_stale <= 0:
+		return
+	var index := 24 - _hours_stale
+	_hours_stale -= 1
+	if index >= _hour_items.size():
+		_hours_stale = 0
+		return
+	var old: Dictionary = _hour_items[index]
+	var fresh := _make_hour_label(index - 12, Solar.now())
+	if is_instance_valid(old["node"]):
+		(old["node"] as Node).queue_free()
+	(fresh["parent"] as Node3D).add_child(fresh["node"])
+	_hour_items[index] = fresh
 
 ## Earthquakes in the shape chosen in Preferences (Flatland's EarthquakeShapes): animated or static
 ## arrow, sphere, pulsating sphere, pyramid, cone, box, cylinder, capsule or tethered magnitude.
@@ -1566,6 +1598,7 @@ func _process(delta: float) -> void:
 	if _pole_shafts.size() == 2:
 		(_pole_shafts[0] as Node3D).rotation.y += delta * deg_to_rad(225.0 / 4.59)
 		(_pole_shafts[1] as Node3D).rotation.y -= delta * deg_to_rad(225.0 / 4.59)
+	_renew_next_hour()
 	_tick += delta
 	if Settings.get_bool("attract_mode"):
 		_attract_angle += delta * TAU / 40.0
@@ -1609,7 +1642,7 @@ func _update_time(snap: bool) -> void:
 		_last_hour_stamp = stamp
 		_refresh_day_night()
 		if Settings.get_string("hour_type") == Settings.HOURS_WALL:
-			_rebuild_hours()
+			_hours_stale = 24      # the minutes have moved on: renew the labels one at a time (see _renew_next_hour)
 
 # MARK: - Camera and interaction
 

@@ -24,6 +24,8 @@ import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SettingsInputAntenna
+import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -85,6 +87,8 @@ private fun iconFor(symbol: String): ImageVector = when (symbol) {
     "lock.open" -> Icons.Outlined.LockOpen
     "arrow.counterclockwise" -> Icons.Outlined.RestartAlt
     "camera" -> Icons.Outlined.PhotoCamera
+    "video" -> Icons.Outlined.Videocam
+    "stop.circle.fill" -> Icons.Filled.StopCircle
     "waveform.path.ecg" -> Icons.Outlined.MonitorHeart
     "globe" -> Icons.Outlined.Public
     "ellipsis.circle" -> Icons.Outlined.MoreHoriz
