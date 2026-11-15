@@ -7,6 +7,9 @@ in 3D and flat polar/equirectangular projections). On Windows the UI (toolbar, d
 built from Godot Control nodes; on macOS, iOS and Android the dialogs and the button bar are native (SwiftUI and
 Jetpack Compose). See [Implementation.md](Implementation.md) for how the project is put together and how to build it.
 
+FlatlandU in "Camera Flight" mode. This is secondary attract mode and flies the camera at low altitude most around the 3D objects.\
+<img src="Images/FlatlandU-recording.gif" alt="Animation of FlatlandU running on an iPhone in demo mode.">\
+
 Animation of FlatlandU running on an iPhone (mirrored to a Mac via Device Hub) in demo mode.\
 <img src="Images/FlatlandUDemoMode.gif" alt="Animation of FlatlandU running on an iPhone in demo mode.">\
 
