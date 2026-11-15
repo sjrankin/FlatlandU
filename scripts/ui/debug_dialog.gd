@@ -202,6 +202,7 @@ func _perf_rows() -> Array:
 		["Video memory", "%.1f MB" % (Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0)],
 		["Earthquakes (feed / shown)", "%d / %d" % [QuakeService.quakes.size(), QuakeService.visible_quakes().size()]],
 		["Satellite map", MapCatalog.satellite_status],
+		["Weather satellites", MapCatalog.weather_status],
 	]
 
 ## Called twice a second: refreshes the native screen if it is showing, otherwise refills both grids if the window is

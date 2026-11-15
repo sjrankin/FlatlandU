@@ -55,6 +55,19 @@ func post(text: String, seconds: float = 6.0) -> void:
 	if _timer.is_stopped():
 		_next()
 
+## Replaces the message that is showing right now (for a message that reports progress, such as a download), leaving the
+## queued messages alone, except that a queued copy of [param replaces] is dropped (so an old "downloading" message that
+## never got its turn does not appear after the final one). If nothing is showing, it simply shows this message.
+##
+## [param text]: the new message.
+## [param seconds]: how long to show it.
+## [param replaces]: text of a queued message to remove, or "" for none.
+func update_current(text: String, seconds: float = 6.0, replaces := "") -> void:
+	if replaces != "":
+		_queue = _queue.filter(func(item: Array) -> bool: return item[0] != replaces)
+	_label.text = text
+	_timer.start(seconds)
+
 ## Sets a standing message (Flatland's "pushed" message) that appears whenever no posted message is showing, until it
 ## expires.
 ##

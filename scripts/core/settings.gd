@@ -49,7 +49,7 @@ const NIGHT_ALPHA := {"VeryLight": 0.25, "Light": 0.4, "Dark": 0.6, "VeryDark": 
 ## performance (see PowerManager), folders and colors.
 const DEFAULTS := {
 	"view_type": VIEW_GLOBE,  # which view is shown (a VIEW_ constant)
-	"map_type": "Simple",  # name of the map picture used (see MapCatalog)
+	"map_type": "NOAA-21 VIIRS (live)",  # name of the map picture used (see MapCatalog); the default is the live NOAA-21 satellite map
 	"show_night": true,  # shade the night side on the flat maps
 	"night_darkness": "Dark",  # how dark that shading is (a key of NIGHT_ALPHA)
 	"hour_type": HOURS_NOON,  # the hour label style (an HOURS_ constant)

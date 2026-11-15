@@ -60,6 +60,8 @@ var _fps_label: Label
 var _fps_accum := 0.0
 ## The status bar ([StatusBar] script) at the bottom.
 var _status: PanelContainer
+## The last "downloading the satellite image" message posted to the status bar, so the final message can replace it.
+var _satellite_msg := ""
 ## The container Godot's own toolbar buttons are added to.
 var _toolbar: Container
 ## The toolbar panel's style, adjusted when it moves to the bottom.
@@ -161,6 +163,17 @@ func _ready() -> void:
 	QuakeService.fetch_started.connect(func() -> void:
 		if QuakeService.fetch_count == 0:
 			_status.post("Refreshing earthquake data.", 4.0))
+	MapCatalog.satellite_progress.connect(func(text: String, done: bool) -> void:
+		if done:
+			_status.update_current(text, 6.0, _satellite_msg)
+			_satellite_msg = ""
+		elif _satellite_msg != "":
+			# A second "downloading" message (the fallback source) replaces the first.
+			_status.update_current(text, 90.0, _satellite_msg)
+			_satellite_msg = text
+		else:
+			_satellite_msg = text
+			_status.post(text, 90.0))
 	QuakeService.fetch_failed.connect(func(reason: String) -> void: _status.post("Earthquake data: " + reason, 5.0))
 	_apply_view_type()
 	_update_debug_grid()
