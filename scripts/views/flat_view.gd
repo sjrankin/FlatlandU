@@ -210,6 +210,28 @@ func _draw() -> void:
 	_draw_pois()
 	_draw_quakes()
 	_draw_satellites()
+	_draw_solar_lunar_points()
+
+## The glossy balls under the sun (yellow) and the moon (bright blue), drawn as discs with a highlight.
+func _draw_solar_lunar_points() -> void:
+	if stage_mode:
+		return
+	var width := _map_radius() * 2.0 if _is_polar() else _rect_map().size.x
+	var r := width * SolarLunarMarker.MAP_FRACTION
+	var now := Solar.now()
+	var entries := []
+	if SolarLunarMarker.sun_enabled():
+		entries.append([SolarLunarMarker.sun_point(now), SolarLunarMarker.SUN_COLOR])
+	if SolarLunarMarker.moon_enabled():
+		entries.append([SolarLunarMarker.moon_point(now), SolarLunarMarker.MOON_COLOR])
+	for entry in entries:
+		var at: Vector2 = entry[0]
+		var color: Color = entry[1]
+		var p := project(at.x, at.y)
+		draw_circle(p, r * 1.25, Color(color, 0.35))                       # a glow
+		draw_circle(p, r, color)
+		draw_arc(p, r, 0.0, TAU, 24, color.darkened(0.45), 1.5, true)
+		draw_circle(p + Vector2(-0.3, -0.35) * r, r * 0.35, Color(1, 1, 1, 0.75))   # the highlight
 
 func _night_alpha() -> float:
 	return float(Settings.NIGHT_ALPHA.get(Settings.get_string("night_darkness"), 0.4)) * 0.7   # lighter than before

@@ -105,6 +105,7 @@ struct ScreenPageView: View {
     var body: some View {
         ScreenPageContent(model: model, items: items)
             .navigationTitle(page.title)
+            .withBackButton()
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -381,6 +382,7 @@ struct ChoiceList: View {
             }
         }
         .navigationTitle(item.title)
+        .withBackButton()
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

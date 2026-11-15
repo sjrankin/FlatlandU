@@ -5,6 +5,8 @@ extends Node3D
 
 signal hover_changed(lat: float, lon: float, over_globe: bool)
 signal location_clicked(lat: float, lon: float)
+## The user asked for the context menu (right click, or a long press on a phone) at this point of the view.
+signal context_requested(position: Vector2)
 
 const R := Geo.GLOBE_RADIUS
 # Camera as in FlatlandView: a perspective camera 175 units away with a roughly 9 to 10 degree field of view
@@ -63,6 +65,43 @@ var _yaw := 0.0
 var _pan := Vector2.ZERO            # screen-plane offset of the camera (command/option-drag)
 var _pitch := 0.0
 var _distance := DEFAULT_DISTANCE
+## Special vantage points chosen from the context menu (never saved): the camera leaves its orbit around the Earth.
+enum CamMode { ORBIT, FROM_MOON, FROM_SUN, LOOK_AT_MOON, FLIGHT }
+signal camera_mode_changed(mode: int)
+var _cam_mode := CamMode.ORBIT
+var _look_from := Vector3.ZERO        # LOOK_AT_MOON: where the camera stands (fixed; it does not follow the moon)
+var _blend := 1.0                     # 0..1 progress of the glide to a new vantage point
+var _blend_from := Transform3D.IDENTITY
+var _blend_fov := CAMERA_FOV
+var _blend_tween: Tween
+var _look_fov := 4.0                  # LOOK_AT_MOON: the zoom, as the camera's field of view in degrees
+const LOOK_FOV_MIN := 0.2
+const LOOK_FOV_MAX := 40.0
+
+# Camera flight: a slow, wandering flight just above the surface, among the hour labels.
+const Wander := preload("res://scripts/views/wander.gd")
+const HOUR_RADIUS := 11.5                                       # where the hour labels sit, from the Earth's centre
+const HOUR_ALTITUDE := HOUR_RADIUS - R                          # their height above the surface
+const FLIGHT_MIN_RADIUS := R + HOUR_ALTITUDE * 0.1              # the flight stays between 0.1x and 1.1x the hours' altitude
+const FLIGHT_MAX_RADIUS := R + HOUR_ALTITUDE * 1.1
+const FLIGHT_FOV := 60.0
+const FLIGHT_YAW_LIMIT := 20.0                                  # degrees the view may turn to either side of the course
+const FLIGHT_PITCH_LIMIT := 15.0                                # degrees it may tip up or down
+const FLIGHT_CLEARANCE := 1.2                                   # keep this far from any satellite, quake marker or pole
+const FLIGHT_REACH := 4.0                                       # start steering round something this far ahead
+var _fl_dir := Vector3.BACK                    # unit vector from the Earth's centre to the camera
+var _fl_tangent := Vector3.RIGHT               # the course: along the surface, perpendicular to _fl_dir
+var _fl_forward := Vector3.RIGHT               # where the camera looks (the course turned by the yaw and pitch offsets)
+var _fl_pos := Vector3.ZERO
+var _fl_obstacles: Array[Vector3] = []
+var _fl_avoid := 0.0                           # the eased-in turn away from obstacles, radians a second
+var _fl_obstacle_age := 99.0
+var _fl_rng := RandomNumberGenerator.new()
+var _fl_altitude: RefCounted                   # Wander objects
+var _fl_speed: RefCounted
+var _fl_turn: RefCounted
+var _fl_yaw: RefCounted
+var _fl_pitch: RefCounted
 var _hour_alpha := 1.0              # current opacity of the hour labels (depends on zoom)
 var _dragging := false
 var _intro: IntroText
@@ -71,6 +110,8 @@ const NIGHT_LAYER := 1 << 1   # night-side objects: not lit by the sun
 var _tap_start := Vector2.ZERO
 const TAP_SLOP := 6.0   # pixels a tap may move and still count as a tap
 var _last_hour_stamp := -1
+var _sun_point: MeshInstance3D       # the ball under the sun (SolarLunarMarker)
+var _moon_point: MeshInstance3D      # the ball under the moon
 var _quake_nodes: Dictionary = {}   # quake id -> {group: Node3D holding all its nodes, indicator: Node3D or null}
 var _indicator_parent: Node3D       # where _add_quake_indicator puts what it builds
 var _tick := 0.0
@@ -333,6 +374,8 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 		"hour_type", "home_latitude", "home_longitude":
 			_last_hour_stamp = -1
 			_rebuild_hours()
+		"show_sun_point", "show_moon_point":
+			_place_solar_lunar_points(Solar.now())
 		"show_moon":
 			_moon_body.visible = Settings.get_bool("show_moon")
 			_apply_camera()
@@ -545,8 +588,10 @@ func _build_stars() -> void:
 		var dec := deg_to_rad(float(row[1]))
 		var mag := float(row[2])
 		var d := Vector3(cos(dec) * sin(ra), sin(dec), cos(dec) * cos(ra))
-		var size_px := clampf(7.0 - 1.2 * mag, 4.5, 14.0)           # brighter stars are bigger
-		var bright := clampf(1.4 - 0.15 * mag, 0.75, 1.0)
+		# Brightness follows the star's magnitude: every magnitude is 2.5 times fainter than the one before (shown a little
+		# flatter than that, or the faint stars would vanish). Brighter stars are also drawn a little bigger.
+		var bright := clampf(pow(10.0, -0.24 * (mag - 0.5)), 0.1, 1.0)
+		var size_px := 2.5 + 7.5 * sqrt(bright)
 		var c := _star_color(float(row[3])) * bright
 		var base := verts.size()
 		for k in range(4):
@@ -941,8 +986,32 @@ func _build_cube() -> void:
 		quad.basis = f[2]
 		_cube.add_child(quad)
 
+## Puts the balls under the sun and the moon (on the cube, where the line from the centre to the point meets its surface).
+func _place_solar_lunar_points(now: float) -> void:
+	if _sun_point == null:
+		var r := Geo.GLOBE_RADIUS * SolarLunarMarker.GLOBE_FRACTION
+		_sun_point = SolarLunarMarker.build(SolarLunarMarker.SUN_COLOR, r)
+		_moon_point = SolarLunarMarker.build(SolarLunarMarker.MOON_COLOR, r)
+		_earth.add_child(_sun_point)
+		_earth.add_child(_moon_point)
+	_sun_point.visible = SolarLunarMarker.sun_enabled()
+	_moon_point.visible = SolarLunarMarker.moon_enabled()
+	var pairs := [[_sun_point, SolarLunarMarker.sun_point(now)], [_moon_point, SolarLunarMarker.moon_point(now)]]
+	for pair in pairs:
+		var at: Vector2 = pair[1]
+		var dir := Geo.to_vec3(at.x, at.y, 1.0)
+		var node: MeshInstance3D = pair[0]
+		if _cubic:
+			var half := Geo.GLOBE_RADIUS * 0.5       # the cube is half the globe's diameter across
+			var longest := maxf(absf(dir.x), maxf(absf(dir.y), absf(dir.z)))
+			node.position = dir * (half / longest + Geo.GLOBE_RADIUS * SolarLunarMarker.GLOBE_FRACTION)
+		else:
+			node.position = dir * Geo.GLOBE_RADIUS * 1.05
+
 func set_cubic(on: bool) -> void:
 	_cubic = on
+	if _sun_point != null:
+		_place_solar_lunar_points(Solar.now())
 	_cube.visible = on
 	_noon_line.visible = not on
 	for n in [_earth_mesh, _sea_mesh, _cities_node, _quakes_node, _grid_node, _sites_node, _pois_node, _regions_node]:
@@ -1057,7 +1126,7 @@ func _apply_alpha_to_hour_material(mat: StandardMaterial3D, alpha: float) -> voi
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA if alpha < 0.999 else BaseMaterial3D.TRANSPARENCY_DISABLED
 
 func _update_hour_alpha() -> void:
-	var a := _hour_alpha_for_distance(_distance)
+	var a := 1.0 if _cam_mode == CamMode.FLIGHT else _hour_alpha_for_distance(_distance if _cam_mode == CamMode.ORBIT else _camera.global_position.length())
 	if is_equal_approx(a, _hour_alpha) or _hours_earth == null or _hours_fixed == null:
 		return
 	_hour_alpha = a
@@ -1097,7 +1166,7 @@ func _rebuild_hours() -> void:
 		var basis := Geo.surface_basis(0.0, lon)
 		# Text reads along the meridian (top to bottom), as in Flatland.
 		basis = basis * Basis(Vector3.BACK, deg_to_rad(-90.0))
-		mi.transform = Transform3D(basis, Geo.to_vec3(0.0, lon, 11.5))
+		mi.transform = Transform3D(basis, Geo.to_vec3(0.0, lon, HOUR_RADIUS))
 		parent.add_child(mi)
 		# Fixed labels sit in the sun's frame (the sun is at longitude 0); wall-clock and home labels turn with the Earth.
 		var label_night := not Solar.is_daylight(0.0, lon, utc) if parent == _hours_earth else absf(wrapf(lon, -180.0, 180.0)) > 90.0
@@ -1488,6 +1557,9 @@ func _process(delta: float) -> void:
 		_apply_camera()
 	_place_stars()
 	_update_satellites()
+	if _cam_mode == CamMode.FLIGHT:
+		_step_flight(delta)
+		_apply_camera()
 	for a in _arrows:
 		if is_instance_valid(a["node"]):
 			(a["node"] as Node3D).rotation.y += a["dir"] * delta     # about 1 radian per second
@@ -1518,6 +1590,7 @@ func _update_time(snap: bool) -> void:
 		_stars_basis = Basis(Vector3.RIGHT, decl) * Basis(Vector3.UP, -deg_to_rad(Solar.right_ascension(now)))
 		_place_stars()
 		_place_moon(now)
+	_place_solar_lunar_points(now)
 	_system.rotation.x = decl          # tilt the Earth; the sun stays fixed behind the camera
 	var sun_dir := Vector3(0, 0, 1)
 	var lit_mats: Array[ShaderMaterial] = [_earth_mat, _sea_mat]
@@ -1544,6 +1617,7 @@ var _reset_tween: Tween
 
 ## Return the camera to its default orientation. Animated over one second unless `animate` is false.
 func reset_view(animate: bool = true) -> void:
+	_leave_special_mode()
 	if _reset_tween != null and _reset_tween.is_valid():
 		_reset_tween.kill()
 	if not animate:
@@ -1569,22 +1643,29 @@ func reset_view(animate: bool = true) -> void:
 		_apply_camera(), 0.0, 1.0, 1.0)
 
 func _apply_camera() -> void:
-	_orbit.rotation = Vector3(_pitch, _yaw, 0.0)
-	# Keep the whole globe in view whatever the window shape: fit the narrower dimension.
+	var cam_z: float
+	if _cam_mode == CamMode.ORBIT:
+		_orbit.rotation = Vector3(_pitch, _yaw, 0.0)
+		_camera.fov = CAMERA_FOV
+		_camera.basis = Basis.IDENTITY     # the special modes aim the camera itself; the orbit does the aiming here
+		# Keep the whole globe in view whatever the window shape: fit the narrower dimension.
+		var vs0 := get_viewport().get_visible_rect().size
+		var fit := 1.0
+		if vs0.y > 0.0:
+			fit = maxf(1.0, 0.95 / (vs0.x / vs0.y))
+		cam_z = _distance * fit
+		_camera.position = Vector3(_pan.x, _pan.y, cam_z)
+		# Keep the depth range tight around the globe so shadows stay sharp at this distance.
+		# With satellites on, leave room for the geostationary ring, which is well in front of and behind the globe.
+		var extra := 60.0 if Settings.get_bool("show_satellites") else 0.0
+		_camera.near = maxf(0.1, cam_z - 40.0 - extra)
+		_camera.far = cam_z + 40.0 + extra
+		if _moon_body != null and _moon_body.visible:
+			# The Moon is far out (about 600 units): reach it, and leave the star field just beyond it.
+			_camera.far = maxf(_camera.far, cam_z + _moon_distance + 20.0)
+	else:
+		cam_z = _apply_special_camera()
 	var vs := get_viewport().get_visible_rect().size
-	var fit := 1.0
-	if vs.y > 0.0:
-		fit = maxf(1.0, 0.95 / (vs.x / vs.y))
-	var cam_z := _distance * fit
-	_camera.position = Vector3(_pan.x, _pan.y, cam_z)
-	# Keep the depth range tight around the globe so shadows stay sharp at this distance.
-	# With satellites on, leave room for the geostationary ring, which is well in front of and behind the globe.
-	var extra := 60.0 if Settings.get_bool("show_satellites") else 0.0
-	_camera.near = maxf(0.1, cam_z - 40.0 - extra)
-	_camera.far = cam_z + 40.0 + extra
-	if _moon_body != null and _moon_body.visible:
-		# The Moon is far out (about 600 units): reach it, and leave the star field just beyond it.
-		_camera.far = maxf(_camera.far, cam_z + _moon_distance + 20.0)
 	_sun.directional_shadow_max_distance = cam_z + 40.0
 	_update_hour_alpha()
 	if _sky_mesh != null:
@@ -1595,8 +1676,212 @@ func _apply_camera() -> void:
 		_pixel_angle = deg_to_rad(_camera.fov) / maxf(1.0, vs.y)
 		_place_stars()
 
+func camera_mode() -> int:
+	return _cam_mode
+
+## Moves the camera to a special vantage point (or back to orbiting the Earth with ORBIT), gliding there over a second.
+## FROM_MOON and FROM_SUN follow the moon (the sun is fixed in this scene) so the Earth stays in view; LOOK_AT_MOON stands
+## still and points at the moon as it is now.
+func set_camera_mode(mode: int) -> void:
+	if mode == CamMode.ORBIT:
+		_leave_special_mode()
+		return
+	if _moon_body == null:
+		return
+	if _reset_tween != null and _reset_tween.is_valid():
+		_reset_tween.kill()
+	_blend_from = _camera.global_transform.orthonormalized()
+	_blend_fov = _camera.fov
+	if mode == CamMode.LOOK_AT_MOON:
+		_look_from = _vantage_to_see_moon()
+		_look_fov = 4.0
+	if mode == CamMode.FLIGHT:
+		_start_flight()
+	_cam_mode = mode as CamMode
+	_start_blend()
+	camera_mode_changed.emit(mode)
+	_apply_camera()
+
+func _start_blend() -> void:
+	if _blend_tween != null and _blend_tween.is_valid():
+		_blend_tween.kill()
+	_blend = 0.0
+	_blend_tween = create_tween()
+	_blend_tween.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	_blend_tween.tween_method(func(t: float) -> void:
+		_blend = t
+		_apply_camera(), 0.0, 1.0, 1.0)
+
+## Where to stand to look at the moon: where the camera is now if the moon can be seen from there, otherwise the same
+## distance from the Earth's centre but on the moon's side of the Earth.
+func _vantage_to_see_moon() -> Vector3:
+	var here := _camera.global_position
+	var moon := _moon_body.position
+	if here.length() < R * 1.2:
+		here = here.normalized() * R * 1.2 if here.length() > 0.001 else Vector3(0, 0, R * 1.2)
+	# Closest approach of the line from here to the moon to the Earth's centre.
+	var seg := moon - here
+	var t := clampf(-here.dot(seg) / maxf(seg.length_squared(), 0.001), 0.0, 1.0)
+	if (here + seg * t).length() >= R * 1.02:
+		return here
+	return moon.normalized() * here.length()
+
+## Back to orbiting the Earth, starting from wherever the camera is now.
+func _leave_special_mode() -> void:
+	if _cam_mode == CamMode.ORBIT:
+		return
+	var p := _camera.global_position
+	if p.length() < 0.001:
+		p = Vector3(0, 0, DEFAULT_DISTANCE)
+	var dir := p.normalized()
+	_yaw = atan2(dir.x, dir.z)
+	_pitch = clampf(-asin(clampf(dir.y, -1.0, 1.0)), -1.45, 1.45)
+	_distance = clampf(p.length(), MIN_DISTANCE, MAX_DISTANCE)
+	_pan = Vector2.ZERO
+	_cam_mode = CamMode.ORBIT
+	if _blend_tween != null and _blend_tween.is_valid():
+		_blend_tween.kill()
+	_blend = 1.0
+	_apply_camera()
+	camera_mode_changed.emit(CamMode.ORBIT)
+
+## Starts the flight from where the camera is, heading along the surface.
+func _start_flight() -> void:
+	_fl_rng.randomize()
+	var p := _camera.global_position
+	_fl_dir = p.normalized() if p.length() > 0.001 else Vector3.BACK
+	var fwd := -_camera.global_transform.basis.z
+	fwd = fwd - _fl_dir * fwd.dot(_fl_dir)          # along the surface
+	if fwd.length() < 0.05:
+		fwd = _fl_dir.cross(Vector3.UP)
+		if fwd.length() < 0.05:
+			fwd = _fl_dir.cross(Vector3.RIGHT)
+	_fl_tangent = fwd.normalized()
+	var mid := (FLIGHT_MIN_RADIUS + FLIGHT_MAX_RADIUS) * 0.5
+	_fl_altitude = Wander.new(_fl_rng, FLIGHT_MIN_RADIUS, FLIGHT_MAX_RADIUS, 25.0, 40.0, mid)
+	_fl_speed = Wander.new(_fl_rng, 1.6, 3.6, 30.0, 45.0, 2.4)
+	_fl_turn = Wander.new(_fl_rng, deg_to_rad(-3.5), deg_to_rad(3.5), 30.0, 45.0, 0.0)           # radians a second
+	_fl_yaw = Wander.new(_fl_rng, -FLIGHT_YAW_LIMIT, FLIGHT_YAW_LIMIT, 25.0, 40.0, 0.0)
+	_fl_pitch = Wander.new(_fl_rng, -FLIGHT_PITCH_LIMIT, FLIGHT_PITCH_LIMIT, 25.0, 40.0, 0.0)
+	_fl_pos = _fl_dir * mid
+	_fl_forward = _fl_tangent
+	_fl_obstacle_age = 99.0
+	_fl_avoid = 0.0
+
+## The things the camera must not fly through, refreshed a few times a second: satellites, quake markers and the poles.
+func _refresh_flight_obstacles() -> void:
+	_fl_obstacles.clear()
+	for item in _sat_items.values():
+		var holder: Node3D = (item as Dictionary)["holder"]
+		if is_instance_valid(holder) and holder.visible:
+			_fl_obstacles.append(holder.global_position)
+	for entry in _quake_nodes.values():
+		var group: Node3D = (entry as Dictionary)["group"]
+		if is_instance_valid(group) and group.visible:
+			_fl_obstacles.append(group.global_position * 1.04)   # the markers stand a little way off the surface
+	for pole in [-1.0, 1.0]:
+		for h in [1.1, 1.25]:
+			_fl_obstacles.append(_system.global_transform * Vector3(0, pole * R * h, 0))
+
+## One step of the flight. Everything that changes (speed, course, altitude, the yaw and pitch of the view) follows a
+## slowly wandering value, so nothing jerks. Anything near the path turns the course away from it. The altitude is always
+## inside the band around the hour labels.
+func _step_flight(delta: float) -> void:
+	delta = minf(delta, 0.1)
+	_fl_obstacle_age += delta
+	if _fl_obstacle_age > 0.25:
+		_fl_obstacle_age = 0.0
+		_refresh_flight_obstacles()
+	var radius := clampf(_fl_altitude.step(delta), FLIGHT_MIN_RADIUS, FLIGHT_MAX_RADIUS)
+	var speed: float = _fl_speed.step(delta)
+	var turn: float = _fl_turn.step(delta)
+	# Steer round anything ahead: it turns the course away from the side the thing is on.
+	var right := _fl_tangent.cross(_fl_dir)
+	var avoid := 0.0
+	for o in _fl_obstacles:
+		var rel := o - _fl_pos
+		var d := rel.length()
+		if d < FLIGHT_REACH and rel.dot(_fl_tangent) > -1.0:
+			var side := 1.0 if rel.dot(right) >= 0.0 else -1.0
+			avoid += side * 0.45 * (1.0 - d / FLIGHT_REACH)
+	# The reaction is eased in and out, so the course never swings suddenly when something comes into range.
+	_fl_avoid = lerpf(_fl_avoid, clampf(avoid, -0.35, 0.35), 1.0 - exp(-delta * 1.2))
+	turn += _fl_avoid
+	# Move along the surface (a great circle) and turn the course.
+	var axis := _fl_dir.cross(_fl_tangent).normalized()
+	var angle := speed * delta / radius
+	_fl_dir = _fl_dir.rotated(axis, angle).normalized()
+	_fl_tangent = _fl_tangent.rotated(axis, angle)
+	_fl_tangent = (_fl_tangent - _fl_dir * _fl_tangent.dot(_fl_dir)).normalized()
+	_fl_tangent = _fl_tangent.rotated(_fl_dir, turn * delta)
+	_fl_pos = _fl_dir * radius
+	for o in _fl_obstacles:
+		var off := _fl_pos - o
+		if off.length() < FLIGHT_CLEARANCE * 0.5 and off.length() > 0.001:
+			_fl_pos = o + off.normalized() * FLIGHT_CLEARANCE * 0.5
+	# The view looks along the course, turned a little to the side and tipped up or down. The pitch is measured from the
+	# horizon (which dips further below level the higher the camera is), so the Earth stays in the lower part of the
+	# view whatever the pitch offset.
+	var yaw := deg_to_rad(_fl_yaw.step(delta))
+	var pitch := deg_to_rad(_fl_pitch.step(delta)) - acos(R / radius) * 0.9
+	var look := _fl_tangent.rotated(_fl_dir, yaw)
+	look = look.rotated(look.cross(_fl_dir).normalized(), pitch)
+	# Ease the view toward where it should look, so any small step in the target never shows as a jerk.
+	_fl_forward = _fl_forward.slerp(look, 1.0 - exp(-delta * 3.0)).normalized()
+
+## Positions the camera for the current special mode. Returns the camera's distance from the origin.
+func _apply_special_camera() -> float:
+	var moon_pos := _moon_body.position
+	var pos := Vector3.ZERO
+	var target := Vector3.ZERO
+	match _cam_mode:
+		CamMode.FROM_MOON:
+			pos = moon_pos
+		CamMode.FROM_SUN:
+			# The sun is a very long way off; it is drawn as far out as the moon, which gives the same view.
+			pos = Vector3(0, 0, _moon_distance)
+		CamMode.LOOK_AT_MOON:
+			pos = _look_from
+			target = moon_pos
+		CamMode.FLIGHT:
+			pos = _fl_pos
+			target = _fl_pos + _fl_forward
+	var dist := pos.distance_to(target)
+	var fov := _look_fov
+	if _cam_mode == CamMode.FLIGHT:
+		fov = FLIGHT_FOV
+	elif _cam_mode != CamMode.LOOK_AT_MOON:
+		# Frame the Earth so it fills about half the height of the view.
+		fov = clampf(rad_to_deg(2.0 * asin(minf(1.0, R / maxf(dist, R)))) / 0.5, 0.5, CAMERA_FOV)
+	var forward := (target - pos).normalized()
+	var up := Vector3.UP if absf(forward.dot(Vector3.UP)) < 0.99 else Vector3.FORWARD
+	if _cam_mode == CamMode.FLIGHT:
+		up = pos.normalized()          # the horizon stays level: up is away from the Earth
+	var xf := Transform3D(Basis.looking_at(forward, up), pos)
+	_orbit.rotation = Vector3.ZERO
+	var extra := 60.0 if Settings.get_bool("show_satellites") else 0.0
+	var near_plane := 1.0
+	var far_plane := dist + 60.0 + extra
+	if _cam_mode == CamMode.FLIGHT:
+		near_plane = 0.1
+		far_plane = (_moon_distance + 100.0) if _moon_body.visible else 400.0
+	elif _cam_mode != CamMode.LOOK_AT_MOON:
+		near_plane = maxf(0.1, dist - 40.0 - extra)
+		far_plane = dist + 40.0 + extra
+	if _blend < 1.0:
+		xf = _blend_from.interpolate_with(xf, _blend)
+		fov = lerpf(_blend_fov, fov, _blend)
+		near_plane = 0.5
+		far_plane = maxf(far_plane, _moon_distance + 100.0)
+	_camera.global_transform = xf
+	_camera.fov = fov
+	_camera.near = near_plane
+	_camera.far = far_plane
+	return pos.length()
+
 ## Rotates the camera so the given location faces the viewer.
 func look_at_location(lat: float, lon: float) -> void:
+	_leave_special_mode()
 	# World direction of the place: local position -> Earth rotation -> seasonal tilt.
 	var v := _system.basis * (Basis(Vector3.UP, _earth_angle) * Geo.to_vec3(lat, lon, 1.0))
 	_yaw = atan2(v.x, v.z)
@@ -1703,6 +1988,13 @@ func handle_gui_input(event: InputEvent) -> void:
 	_check_intro_tap(event)
 	if Settings.get_bool("world_locked"):
 		return
+	if _cam_mode == CamMode.FLIGHT:
+		_flight_input(event)
+		return
+	if _cam_mode == CamMode.LOOK_AT_MOON and _zoom_look(event):
+		return
+	if _cam_mode != CamMode.ORBIT and _moves_camera(event):
+		_leave_special_mode()
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		match mb.button_index:
@@ -1715,7 +2007,12 @@ func handle_gui_input(event: InputEvent) -> void:
 					_reset_tween.kill()
 				if mb.pressed and mb.double_click:
 					_dragging = false
+					_press_token += 1
 					reset_view()   # double-click resets the view
+				elif mb.pressed:
+					_begin_long_press(mb.position)
+				else:
+					_press_token += 1
 			MOUSE_BUTTON_WHEEL_UP:
 				_distance = clampf(_distance * 0.92, MIN_DISTANCE, MAX_DISTANCE)
 				_apply_camera()
@@ -1724,10 +2021,12 @@ func handle_gui_input(event: InputEvent) -> void:
 				_apply_camera()
 			MOUSE_BUTTON_RIGHT:
 				if mb.pressed:
-					_emit_click(mb.position)
+					context_requested.emit(mb.position)
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
 		_mouse_pos = mm.position
+		if mm.position.distance_to(_long_press_at) > TAP_SLOP * 2.0:
+			_press_token += 1   # moved too far: not a long press
 		if not _dragging:
 			_update_star_tooltip(mm.position)
 		if _dragging and not _pinching:
@@ -1750,6 +2049,70 @@ func handle_gui_input(event: InputEvent) -> void:
 		_pitch = clampf(_pitch + pg.delta.y * 0.01, -1.45, 1.45)
 		_apply_camera()
 
+var _press_token := 0
+var _long_press_at := Vector2.ZERO
+
+## On a phone or tablet, holding a finger still for a moment asks for the context menu.
+func _begin_long_press(pos: Vector2) -> void:
+	_long_press_at = pos
+	if not Layout.is_phone():
+		return
+	_press_token += 1
+	var token := _press_token
+	await get_tree().create_timer(0.6).timeout
+	if token == _press_token and _dragging and not _pinching:
+		_dragging = false
+		_press_token += 1
+		context_requested.emit(pos)
+
+## During the flight the camera ignores dragging and zooming; a double click ends it (back to the normal view).
+func _flight_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			_dragging = mb.pressed and not mb.double_click
+			if mb.pressed and mb.double_click:
+				_press_token += 1
+				reset_view()
+			elif mb.pressed:
+				_begin_long_press(mb.position)
+			else:
+				_press_token += 1
+		elif mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+			context_requested.emit(mb.position)
+	elif event is InputEventMouseMotion:
+		if (event as InputEventMouseMotion).position.distance_to(_long_press_at) > TAP_SLOP * 2.0:
+			_press_token += 1
+
+## Looking at the moon: the wheel and the trackpad pinch zoom by narrowing or widening the field of view. True if used.
+func _zoom_look(event: InputEvent) -> bool:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+			zoom_look(1.0 / 0.92)
+			return true
+		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			zoom_look(1.0 / 1.08)
+			return true
+	elif event is InputEventMagnifyGesture:
+		zoom_look((event as InputEventMagnifyGesture).factor)
+		return true
+	return false
+
+## factor > 1 zooms in.
+func zoom_look(factor: float) -> void:
+	_look_fov = clampf(_look_fov / factor, LOOK_FOV_MIN, LOOK_FOV_MAX)
+	_apply_camera()
+
+## Whether an input event would turn, pan or zoom the camera.
+func _moves_camera(event: InputEvent) -> bool:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		return mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN
+	if event is InputEventMouseMotion:
+		return _dragging and not _pinching
+	return event is InputEventMagnifyGesture or event is InputEventPanGesture
+
 ## Two-finger pinch on a touch screen (driven by main.gd). While two fingers are down the
 ## one-finger drag that Godot emulates from the first finger must not also spin the globe.
 var _pinching := false
@@ -1761,6 +2124,12 @@ func set_pinching(on: bool) -> void:
 func pinch_zoom(factor: float) -> void:
 	if Settings.get_bool("world_locked"):
 		return
+	if _cam_mode == CamMode.FLIGHT:
+		return
+	if _cam_mode == CamMode.LOOK_AT_MOON:
+		zoom_look(factor)
+		return
+	_leave_special_mode()
 	_distance = clampf(_distance / factor, MIN_DISTANCE, MAX_DISTANCE)
 	_apply_camera()
 

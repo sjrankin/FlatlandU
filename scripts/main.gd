@@ -19,6 +19,9 @@ var _content: Control
 var _toolbar_bar: PanelContainer
 var _globe_container: SubViewportContainer
 var _globe_viewport: SubViewport
+## The globe view script, by path: its camera-mode enum is used here without a global class name.
+const GlobeScript := preload("res://scripts/views/globe_view.gd")
+
 var _globe: Node3D
 var _flat: FlatStage
 var _time_label: Label
@@ -97,6 +100,11 @@ func _ready() -> void:
 	_begin_startup_wait()
 	print("Native UI: %s (embedded in the editor: %s)" % ["used" if NativeUI.wanted() else "not used", Engine.is_embedded_in_editor()])
 	get_window().size_changed.connect(_relayout)   # the safe area changes when a phone is rotated
+	if _vantage == "flightreset":
+		_globe.set_camera_mode(GlobeScript.CamMode.FLIGHT)
+		get_tree().create_timer(0.5).timeout.connect(func() -> void: _globe.reset_view())
+	elif _vantage != "":
+		_globe.set_camera_mode({"moon": GlobeScript.CamMode.FROM_MOON, "sun": GlobeScript.CamMode.FROM_SUN, "lookmoon": GlobeScript.CamMode.LOOK_AT_MOON, "flight": GlobeScript.CamMode.FLIGHT}.get(_vantage, 0))
 	if _cam_args.size() == 3:
 		_globe.set_camera(_cam_args[0], _cam_args[1], _cam_args[2])
 	if _open_on_start != "":
@@ -130,6 +138,8 @@ func _parse_command_line() -> void:
 				Settings.override(kv[0], int(kv[1]) if cur is int else (float(kv[1]) if cur is float else (kv[1] == "true" if cur is bool else kv[1])))
 		elif arg.begins_with("--cam="):
 			_cam_args = arg.substr(6).split_floats(",")
+		elif arg.begins_with("--vantage="):
+			_vantage = arg.substr(10)   # development: moon, sun or lookmoon
 		elif arg.begins_with("--resize="):
 			_resize_to = arg.substr(9)
 		elif arg.begins_with("--open="):
@@ -152,12 +162,14 @@ func _build_views() -> void:
 	_globe_viewport.handle_input_locally = true
 	_globe_viewport.gui_disable_input = false
 	_globe_container.add_child(_globe_viewport)
-	_globe = load("res://scripts/views/globe_view.gd").new()
+	_globe = GlobeScript.new()
 	_globe_viewport.add_child(_globe)
 	_globe.hover_changed.connect(_on_hover)
 	_globe.location_clicked.connect(_on_location_clicked)
 	_globe_container.gui_input.connect(_globe.handle_gui_input)
 	_globe.star_tooltip_changed.connect(_on_star_tooltip)   # macOS only
+	_globe.context_requested.connect(_on_globe_context_requested)
+	_globe.camera_mode_changed.connect(func(_m: int) -> void: _refresh_context_menu())
 	_globe_container.mouse_entered.connect(_globe.set_mouse_inside.bind(true))
 	_globe_container.mouse_exited.connect(func() -> void:
 		_globe.set_mouse_inside(false)
@@ -293,6 +305,68 @@ func _build_more_button() -> void:
 	_more_button = _icon_button("BlackList", "More", "Today's times, my locations, earthquake regions and refresh.", func() -> void:
 		var below := Vector2i(_more_button.get_screen_position()) + Vector2i(0, int(_more_button.size.y))
 		more.popup(Rect2i(below, Vector2i.ZERO)))
+
+# MARK: - Context menu
+
+const CTX_FROM_MOON := 1
+const CTX_FROM_SUN := 2
+const CTX_MOON_FROM_EARTH := 3
+const CTX_RESET := 4
+const CTX_WHATS_HERE := 5
+const CTX_FLIGHT := 6
+
+var _context_menu: PopupMenu
+var _vantage := ""
+var _context_point := Vector2.ZERO    ## where in the globe view the menu was asked for
+
+## The menu for the 3D views: right click on a desktop, a long press on a phone or tablet. Choosing outside it closes it.
+## The vantage points are not saved; they last until the camera is moved or the view is reset.
+func _on_globe_context_requested(at: Vector2) -> void:
+	if _context_menu == null:
+		_context_menu = PopupMenu.new()
+		_context_menu.id_pressed.connect(_on_context_menu)
+		if Layout.is_phone():
+			_context_menu.add_theme_font_size_override("font_size", Layout.font(18))
+		add_child(_context_menu)
+	_context_point = at
+	_refresh_context_menu()
+	var screen := Vector2i(_globe_container.get_screen_position() + at)
+	_context_menu.popup(Rect2i(screen, Vector2i.ZERO))
+
+func _refresh_context_menu() -> void:
+	if _context_menu == null:
+		return
+	var mode: int = _globe.camera_mode()
+	_context_menu.clear()
+	_context_menu.add_check_item("Show Earth from Moon", CTX_FROM_MOON)
+	_context_menu.set_item_checked(_context_menu.item_count - 1, mode == GlobeScript.CamMode.FROM_MOON)
+	_context_menu.add_check_item("Show Earth from Sun", CTX_FROM_SUN)
+	_context_menu.set_item_checked(_context_menu.item_count - 1, mode == GlobeScript.CamMode.FROM_SUN)
+	_context_menu.add_item("View Moon from Earth", CTX_MOON_FROM_EARTH)
+	_context_menu.add_check_item("Camera Flight", CTX_FLIGHT)
+	_context_menu.set_item_checked(_context_menu.item_count - 1, mode == GlobeScript.CamMode.FLIGHT)
+	_context_menu.add_item("Reset View", CTX_RESET)
+	if _globe.pick(_context_point).get("hit", false):
+		_context_menu.add_separator()
+		_context_menu.add_item("What's Here?", CTX_WHATS_HERE)
+
+func _on_context_menu(id: int) -> void:
+	var mode: int = _globe.camera_mode()
+	match id:
+		CTX_FROM_MOON:
+			_globe.set_camera_mode(GlobeScript.CamMode.ORBIT if mode == GlobeScript.CamMode.FROM_MOON else GlobeScript.CamMode.FROM_MOON)
+		CTX_FROM_SUN:
+			_globe.set_camera_mode(GlobeScript.CamMode.ORBIT if mode == GlobeScript.CamMode.FROM_SUN else GlobeScript.CamMode.FROM_SUN)
+		CTX_MOON_FROM_EARTH:
+			_globe.set_camera_mode(GlobeScript.CamMode.LOOK_AT_MOON)
+		CTX_FLIGHT:
+			_globe.set_camera_mode(GlobeScript.CamMode.ORBIT if mode == GlobeScript.CamMode.FLIGHT else GlobeScript.CamMode.FLIGHT)
+		CTX_RESET:
+			_action_reset_view()
+		CTX_WHATS_HERE:
+			var p: Dictionary = _globe.pick(_context_point)
+			if p.get("hit", false):
+				_on_location_clicked(p["lat"], p["lon"])
 
 # MARK: - Start-up
 

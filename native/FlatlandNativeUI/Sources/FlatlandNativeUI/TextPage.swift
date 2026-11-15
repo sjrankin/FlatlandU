@@ -15,6 +15,7 @@ struct TextPage: View {
                 .padding()
         }
         .navigationTitle(title)
+        .withBackButton()
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

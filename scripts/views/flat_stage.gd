@@ -51,6 +51,8 @@ var _city_items: Array = []
 var _city_key := ""
 var _quake_items: Array = []
 var _quake_key := ""
+var _sun_point: MeshInstance3D       # the ball under the sun (SolarLunarMarker)
+var _moon_point: MeshInstance3D      # the ball under the moon
 var _sat_items: Dictionary = {}
 var _material_cache: Dictionary = {}
 var _poll := 0.0
@@ -211,6 +213,24 @@ func _process(_delta: float) -> void:
 	_update_cities(recheck)
 	_update_quakes(recheck)
 	_update_satellites()
+	_update_solar_lunar_points()
+
+## The balls under the sun and the moon rest on the map at those points.
+func _update_solar_lunar_points() -> void:
+	if _sun_point == null:
+		var r := PLANE_WIDTH * SolarLunarMarker.MAP_FRACTION
+		_sun_point = SolarLunarMarker.build(SolarLunarMarker.SUN_COLOR, r)
+		_moon_point = SolarLunarMarker.build(SolarLunarMarker.MOON_COLOR, r)
+		_stage_vp.add_child(_sun_point)
+		_stage_vp.add_child(_moon_point)
+	_sun_point.visible = SolarLunarMarker.sun_enabled()
+	_moon_point.visible = SolarLunarMarker.moon_enabled()
+	var now := Solar.now()
+	var raise := Vector3(0.0, PLANE_WIDTH * SolarLunarMarker.MAP_FRACTION, 0.0)
+	var sun := SolarLunarMarker.sun_point(now)
+	var moon := SolarLunarMarker.moon_point(now)
+	_sun_point.position = _picture_to_world(_flat.project(sun.x, sun.y)) + raise
+	_moon_point.position = _picture_to_world(_flat.project(moon.x, moon.y)) + raise
 
 ## The sun hovers above the plane over the sub-solar point, with its shadow falling on the map.
 func _update_sun() -> void:

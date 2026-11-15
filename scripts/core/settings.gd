@@ -48,6 +48,8 @@ const DEFAULTS := {
 	"show_noon_meridians": true,
 	"show_minor_grid": true,
 	"show_moon_light": true,
+	"show_sun_point": true,
+	"show_moon_point": true,
 	"show_stars": true,
 	"attract_mode": false,
 	"world_locked": false,
