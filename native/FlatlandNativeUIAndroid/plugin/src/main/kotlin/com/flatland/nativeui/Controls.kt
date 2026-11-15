@@ -46,16 +46,36 @@ import androidx.compose.ui.unit.dp
 // Pick-lists, numbers and colours. Colours travel as "#rrggbb" text, the form Godot's Settings keeps.
 
 
+/**
+ * Makes a Color from "#rrggbb" text (the form Godot's Settings keeps).
+ *
+ * @param hex the text; the "#" is optional. Anything unreadable gives black.
+ * @return the Color.
+ */
 fun parseHex(hex: String): Color {
     val s = hex.trim().removePrefix("#")
     val v = s.toLongOrNull(16) ?: 0L
     return Color(((v shr 16) and 0xFF).toInt(), ((v shr 8) and 0xFF).toInt(), (v and 0xFF).toInt())
 }
 
+/**
+ * The color as "#rrggbb" text, for sending back to Godot.
+ *
+ * @param r red, 0 to 1.
+ * @param g green, 0 to 1.
+ * @param b blue, 0 to 1.
+ * @return the lower-case text.
+ */
 fun hexOf(r: Float, g: Float, b: Float): String =
     "#%02x%02x%02x".format((r * 255).toInt().coerceIn(0, 255), (g * 255).toInt().coerceIn(0, 255), (b * 255).toInt().coerceIn(0, 255))
 
-/** A choice: a pop-up menu for a few options, a separate list (with group headings) for many. */
+/**
+ * A choice from a list: a pop-up menu for 12 options or fewer, a separate list (with group headings) for more.
+ *
+ * @param model the screen's model.
+ * @param item the "choice" item.
+ * @param navigate called with [Route.Choice] to open the list for a long choice.
+ */
 @Composable
 fun ChoiceRow(model: ScreenModel, item: ScreenItem, navigate: (Route) -> Unit) {
     val current = model.value(item.key)
@@ -94,6 +114,12 @@ fun ChoiceRow(model: ScreenModel, item: ScreenItem, navigate: (Route) -> Unit) {
     }
 }
 
+/**
+ * The list page of a choice with many options, grouped under headings, with a tick on the chosen one.
+ *
+ * @param model the screen's model.
+ * @param item the "choice" item.
+ */
 @Composable
 fun ChoiceList(model: ScreenModel, item: ScreenItem) {
     val current = model.value(item.key)
@@ -118,9 +144,21 @@ fun ChoiceList(model: ScreenModel, item: ScreenItem) {
     }
 }
 
+/**
+ * Writes a number for a text box, rounded to four decimals.
+ *
+ * @param v the number.
+ * @return the text.
+ */
 private fun formatNumber(v: Double): String = valueText(Math.round(v * 10000) / 10000.0)
 
-/** A number: type it in, or use the - and + buttons. */
+/**
+ * A number: type it in, or use the - and + buttons. The value is kept between the item's minimum and maximum. If
+ * Godot changes the value (a preset, say) the field follows unless it already says the same number.
+ *
+ * @param model the screen's model.
+ * @param item the "number" item.
+ */
 @Composable
 fun NumberRow(model: ScreenModel, item: ScreenItem) {
     val current = valueDouble(model.value(item.key))
@@ -155,7 +193,12 @@ fun NumberRow(model: ScreenModel, item: ScreenItem) {
     )
 }
 
-/** A colour: a swatch that opens a dialog with a hex field and red, green and blue sliders. */
+/**
+ * A color: a swatch that opens [ColorDialog].
+ *
+ * @param model the screen's model.
+ * @param item the "color" item.
+ */
 @Composable
 fun ColorRow(model: ScreenModel, item: ScreenItem) {
     val hex = valueText(model.value(item.key)).ifEmpty { "#000000" }
@@ -174,6 +217,14 @@ fun ColorRow(model: ScreenModel, item: ScreenItem) {
     if (editing) ColorDialog(item.title, hex, onPick = { model.set(item.key, it) }, onClose = { editing = false })
 }
 
+/**
+ * A dialog to choose a color: a preview, a hex field and red, green and blue sliders.
+ *
+ * @param title the dialog's title.
+ * @param start the starting color as "#rrggbb".
+ * @param onPick called with the chosen color as "#rrggbb" when OK is pressed.
+ * @param onClose called when the dialog should close.
+ */
 @Composable
 private fun ColorDialog(title: String, start: String, onPick: (String) -> Unit, onClose: () -> Unit) {
     var color by remember { mutableStateOf(parseHex(start)) }

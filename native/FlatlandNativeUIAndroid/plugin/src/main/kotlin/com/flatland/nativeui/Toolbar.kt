@@ -52,15 +52,45 @@ import org.json.JSONArray
 // sending its own id. The bar lays itself out in as many equal rows as the width needs, so every button is
 // visible, and reports its height (in pixels, without the navigation bar) so Godot can leave room for it.
 
+/**
+ * One entry of a button's pop-up menu.
+ *
+ * @property id sent to Godot when the entry is chosen.
+ * @property title the entry's text.
+ */
 data class ToolbarEntry(val id: String, val title: String)
 
+/**
+ * One button of the bar, from the JSON Godot sends. A button with a menu opens the menu instead of sending its own
+ * id.
+ *
+ * @property id sent to Godot when tapped.
+ * @property title the text under the icon.
+ * @property symbol the SF Symbol name Godot sends (iOS); [iconFor] maps it to a Material icon.
+ * @property selected true to draw it in the primary color.
+ * @property menu the entries of its pop-up menu; empty for an ordinary button.
+ */
 data class ToolbarButton(val id: String, val title: String, val symbol: String, val selected: Boolean, val menu: List<ToolbarEntry>)
 
+/**
+ * The button bar's data: the buttons and the tap callback.
+ */
 class ToolbarModel {
+    /**
+     * The buttons, in order; replaced by [update].
+     */
     var buttons by mutableStateOf(listOf<ToolbarButton>())
         private set
+    /**
+     * Called with the id when a button or menu entry is tapped; sent to Godot as `toolbar_tapped`.
+     */
     var onTap: (String) -> Unit = {}
 
+    /**
+     * Replaces the buttons from the JSON Godot sent. If the JSON cannot be read, nothing changes.
+     *
+     * @param json an array of {id, title, symbol, selected, menu: [{id, title}]}.
+     */
     fun update(json: String) {
         val list = try { JSONArray(json) } catch (e: Exception) { return }
         buttons = (0 until list.length()).mapNotNull { i ->
@@ -78,6 +108,13 @@ class ToolbarModel {
     }
 }
 
+/**
+ * The Material icon for an SF Symbol name (the symbol names are the ones the iOS bar uses); a plain circle for an
+ * unknown name.
+ *
+ * @param symbol the SF Symbol name.
+ * @return the ImageVector.
+ */
 private fun iconFor(symbol: String): ImageVector = when (symbol) {
     "info.circle" -> Icons.Outlined.Info
     "ladybug" -> Icons.Outlined.BugReport
@@ -95,9 +132,22 @@ private fun iconFor(symbol: String): ImageVector = when (symbol) {
     else -> Icons.Outlined.Circle
 }
 
+/**
+ * Height of one row of buttons.
+ */
 private val RowHeight = 56.dp
+/**
+ * The narrowest a button may be; decides how many fit in a row.
+ */
 private val MinimumCell = 72.dp
 
+/**
+ * The bar: a divider and as many equal rows of buttons as the width needs, so every button is visible, above the
+ * navigation bar. It reports its height (in pixels) whenever it changes.
+ *
+ * @param model the bar's model.
+ * @param onHeight called with the height in pixels.
+ */
 @Composable
 fun ToolbarContent(model: ToolbarModel, onHeight: (Int) -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 3.dp) {
@@ -119,6 +169,14 @@ fun ToolbarContent(model: ToolbarModel, onHeight: (Int) -> Unit) {
     }
 }
 
+/**
+ * One button: an icon above a one-line title (primary colored when selected); a tap sends its id, or opens its menu
+ * if it has entries.
+ *
+ * @receiver the row it sits in (it takes an equal share of the width).
+ * @param button the button to draw.
+ * @param onTap called with the id of the button or menu entry tapped.
+ */
 @Composable
 private fun RowScope.ToolbarCell(button: ToolbarButton, onTap: (String) -> Unit) {
     var open by remember { mutableStateOf(false) }

@@ -8,17 +8,32 @@ import SwiftUI
 #if os(iOS)
 import UIKit
 
+/// Puts the SwiftUI button bar on screen. On iOS it is a view along the bottom edge of Godot's view, over it,
+/// reaching down behind the home indicator. On macOS it is a view along the bottom edge of Godot's window, over it
+/// (the window has no bottom safe area). Both report the bar's height, in pixels and without the bottom safe area,
+/// through `onHeight`, so Godot can leave that much room.
 @MainActor
 final class ToolbarPresenter {
+    /// Called with the bar's height in pixels when it changes (0 when the bar is hidden).
     var onHeight: (Int) -> Void = { _ in }
+    /// iOS: the view controller hosting the bar.
     private var controller: ToolbarController?
 
+    /// Shows the bar, if it is not already showing. Tries to attach to the window (for up to ten seconds if it does
+    /// not exist yet).
+    ///
+    /// - Parameter model: the bar's model.
     func show(model: ToolbarModel) {
         guard controller == nil else { return }
         attach(model: model, triesLeft: 40)
     }
 
-    /// Godot may call before the app's window exists; try again for a few seconds.
+    /// Adds the bar to the window. Godot may call before its window is on screen, so if there is none it tries again
+    /// every 250 ms until `triesLeft` runs out. On macOS the bar is pinned to the bottom of the content view and
+    /// relaid out whenever the window is resized.
+    ///
+    /// - Parameter model: the bar's model (iOS only; on macOS it is the stored one).
+    /// - Parameter triesLeft: how many more attempts are allowed.
     private func attach(model: ToolbarModel, triesLeft: Int) {
         guard controller == nil else { return }
         guard let root = Self.rootViewController() else {
@@ -46,6 +61,7 @@ final class ToolbarPresenter {
         controller = bar
     }
 
+    /// Takes the bar off the window and reports a height of 0.
     func hide() {
         guard let bar = controller else { return }
         controller = nil
@@ -55,6 +71,9 @@ final class ToolbarPresenter {
         onHeight(0)
     }
 
+    /// iOS: the root view controller of the key window (or the first window).
+    ///
+    /// - Returns: the controller, or nil if there is no window yet.
     private static func rootViewController() -> UIViewController? {
         let windows = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -63,20 +82,31 @@ final class ToolbarPresenter {
     }
 }
 
-/// Hosts the SwiftUI bar, sizes itself to the rows it needs, and reports the height.
+/// iOS: hosts the SwiftUI bar in a view controller, sizes itself to the rows it needs and reports the height.
 @MainActor
 final class ToolbarController: UIViewController {
+    /// The bar's model.
     let model: ToolbarModel
+    /// Called with the height in pixels when it changes.
     var onHeight: (Int) -> Void = { _ in }
+    /// The constraint on the bar's height (the bar plus the bottom safe area).
     var heightConstraint: NSLayoutConstraint?
+    /// The last height reported.
     private var lastPixels = -1
 
+    /// Creates the controller.
+    ///
+    /// - Parameter model: the bar's model.
     init(model: ToolbarModel) {
         self.model = model
         super.init(nibName: nil, bundle: nil)
     }
+    /// Creates the controller.
+    ///
+    /// - Parameter model: the bar's model.
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    /// Puts the SwiftUI bar view inside this controller's view and arranges a layout whenever the buttons change.
     override func viewDidLoad() {
         super.viewDidLoad()
         let hosting = UIHostingController(rootView: ToolbarView(model: model))
@@ -94,6 +124,8 @@ final class ToolbarController: UIViewController {
         model.onButtonsChanged = { [weak self] in self?.view.setNeedsLayout() }
     }
 
+    /// Works out the columns and rows for the width (leaving the side safe areas), sizes the bar to them plus the
+    /// bottom safe area, and reports the height in pixels when it changes.
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         let usable = view.bounds.width - view.safeAreaInsets.left - view.safeAreaInsets.right
@@ -115,23 +147,43 @@ final class ToolbarController: UIViewController {
 #elseif os(macOS)
 import AppKit
 
+/// Puts the SwiftUI button bar on screen. On iOS it is a view along the bottom edge of Godot's view, over it,
+/// reaching down behind the home indicator. On macOS it is a view along the bottom edge of Godot's window, over it
+/// (the window has no bottom safe area). Both report the bar's height, in pixels and without the bottom safe area,
+/// through `onHeight`, so Godot can leave that much room.
 @MainActor
 final class ToolbarPresenter {
+    /// Called with the bar's height in pixels when it changes (0 when the bar is hidden).
     var onHeight: (Int) -> Void = { _ in }
+    /// macOS: the bar's model (nil after `hide`, which also stops a pending `attach` retry).
     private var model: ToolbarModel?
+    /// macOS: Godot's window the bar sits in.
     private var window: NSWindow?
+    /// macOS: the hosting view of the bar.
     private var bar: NSHostingView<ToolbarView>?
+    /// macOS: the bar's height constraint, changed as the number of rows changes.
     private var heightConstraint: NSLayoutConstraint?
+    /// macOS: the window-resize observer that triggers `relayout` (the number of rows depends on the width).
     private var observer: NSObjectProtocol?
+    /// The last height reported, so `onHeight` is called only when it changes.
     private var lastPixels = -1
 
+    /// Shows the bar, if it is not already showing. Tries to attach to the window (for up to ten seconds if it does
+    /// not exist yet).
+    ///
+    /// - Parameter model: the bar's model.
     func show(model: ToolbarModel) {
         guard bar == nil else { return }
         self.model = model
         attach(triesLeft: 40)
     }
 
-    /// Godot may call before its window is on screen; try again for a few seconds.
+    /// Adds the bar to the window. Godot may call before its window is on screen, so if there is none it tries again
+    /// every 250 ms until `triesLeft` runs out. On macOS the bar is pinned to the bottom of the content view and
+    /// relaid out whenever the window is resized.
+    ///
+    /// - Parameter model: the bar's model (iOS only; on macOS it is the stored one).
+    /// - Parameter triesLeft: how many more attempts are allowed.
     private func attach(triesLeft: Int) {
         guard bar == nil, let model else { return }
         guard let window = Self.godotWindow(), let content = window.contentView else {
@@ -163,7 +215,8 @@ final class ToolbarPresenter {
         relayout()
     }
 
-    /// Chooses the number of rows for the window's width, sizes the bar to them and reports the height in pixels.
+    /// macOS: chooses the number of rows for the window's width, sizes the bar to them and reports the height in
+    /// pixels.
     private func relayout() {
         guard let model, let window, let content = window.contentView, let heightConstraint else { return }
         let layout = ToolbarModel.layout(width: content.bounds.width, count: model.buttons.count)
@@ -177,6 +230,7 @@ final class ToolbarPresenter {
         }
     }
 
+    /// Takes the bar off the window and reports a height of 0.
     func hide() {
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = nil
@@ -188,7 +242,10 @@ final class ToolbarPresenter {
         onHeight(0)
     }
 
-    /// Godot's own window: not one of the windows this extension opens for its screens.
+    /// macOS: finds Godot's own window, not one of the windows this extension opens for its screens. NSApp is still
+    /// nil if Godot has not created the application object yet.
+    ///
+    /// - Returns: the window, or nil.
     private static func godotWindow() -> NSWindow? {
         // NSApp is still nil if Godot has not created the application object yet.
         guard let app = NSApp as NSApplication? else { return nil }

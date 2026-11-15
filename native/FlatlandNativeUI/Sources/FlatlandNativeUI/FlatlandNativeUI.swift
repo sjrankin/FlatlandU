@@ -7,39 +7,43 @@ import UIKit
 import AppKit
 #endif
 
-/// The class Godot sees. GDScript instantiates it by name (ClassDB.instantiate("FlatlandNativeUI")),
-/// calls the @Callable methods, and connects to the signals to hear back:
+/// The class Godot sees. GDScript instantiates it by name (ClassDB.instantiate("FlatlandNativeUI")), calls the
+/// @Callable methods and connects to the signals to hear back. It shows native screens (see Schema.swift for their
+/// JSON), the button bar (NativeToolbar.swift) and reports the power state. All UI work happens on the main thread.
+/// The GDScript side is NativeUI (scripts/core/native_ui.gd).
 ///
-///   showScreen(schemaJson, valuesJson)     open a native screen described by JSON (see Schema.swift)
-///   updateScreen(schemaJson, valuesJson)   replace its content (data changed); navigation stays put
-///   updateValue(key, valueJson)            one value changed on the Godot side
-///   closeScreen()                          close it (for example before showing a Godot dialog)
-///
-///   value_changed(key, value_json)         the user edited a control
-///   action_triggered(id)                   the user tapped a button or row
-///   sheet_closed()                         the screen went away
-///
-/// The button bar (NativeToolbar.swift):
-///   showToolbar(buttonsJson) / updateToolbar(buttonsJson) / hideToolbar()
-///   toolbar_tapped(id)                     a button, or an entry of a button's menu, was tapped
-///   toolbar_height_changed(pixels)         the bar's height (without the bottom safe area), in pixels
-///
-/// Power (see PowerManager in Godot):
-///   powerState() -> String                 "normal", "low_power", "thermal" (hot) or "critical"
+/// Godot to native: showScreen, updateScreen, updateValue, closeScreen, showToolbar, updateToolbar, hideToolbar,
+/// powerState.
+/// Native to Godot (signals): value_changed, action_triggered, sheet_closed, toolbar_tapped, toolbar_height_changed.
 @Godot
 final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
+    /// Signal `value_changed(key, value_json)`: the user edited a control.
     @Signal var valueChanged: SignalWithArguments<String, String>
+    /// Signal `action_triggered(id)`: the user tapped a button or row.
     @Signal var actionTriggered: SignalWithArguments<String>
+    /// Signal `sheet_closed()`: the screen went away.
     @Signal var sheetClosed: SimpleSignal
+    /// Signal `toolbar_tapped(id)`: a button, or an entry of a button's menu, was tapped.
     @Signal var toolbarTapped: SignalWithArguments<String>
+    /// Signal `toolbar_height_changed(pixels)`: the bar's height, without the bottom safe area, in pixels.
     @Signal var toolbarHeightChanged: SignalWithArguments<Int>
 
     // Only touched on the main thread, where Godot runs and where UI must be built.
+    /// The model of the screen being shown (nil when none). Only touched on the main thread, where Godot runs and
+    /// where UI must be built.
     nonisolated(unsafe) private var model: ScreenModel?
+    /// The object that shows the screen as a sheet (nil when none).
     nonisolated(unsafe) private var presenter: SheetPresenter?
+    /// The model of the button bar (nil when it is not shown).
     nonisolated(unsafe) private var toolbarModel: ToolbarModel?
+    /// The object that puts the bar on screen (nil when it is not shown).
     nonisolated(unsafe) private var toolbarPresenter: ToolbarPresenter?
 
+    /// Opens a native screen described by JSON. If one is already open it is closed first without notifying Godot.
+    /// Edits and taps come back through `valueChanged` and `actionTriggered`; closing through `sheetClosed`.
+    ///
+    /// - Parameter schemaJson: the screen description (see ScreenSchema).
+    /// - Parameter valuesJson: the current values, a JSON object.
     @Callable
     func showScreen(schemaJson: String, valuesJson: String) {
         DispatchQueue.main.async { [self] in
@@ -62,6 +66,11 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
+    /// Replaces the content of the open screen (the data changed); navigation inside it stays where it is. Does
+    /// nothing if no screen is open.
+    ///
+    /// - Parameter schemaJson: the new description.
+    /// - Parameter valuesJson: the new values.
     @Callable
     func updateScreen(schemaJson: String, valuesJson: String) {
         DispatchQueue.main.async { [self] in
@@ -71,6 +80,11 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
+    /// One value changed on the Godot side (for example Reset All Settings): updates the control without sending
+    /// anything back.
+    ///
+    /// - Parameter key: the value's key.
+    /// - Parameter valueJson: the new value as JSON.
     @Callable
     func updateValue(key: String, valueJson: String) {
         DispatchQueue.main.async { [self] in
@@ -82,6 +96,7 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
+    /// Closes the open screen (for example before showing a Godot dialog). `sheetClosed` is emitted.
     @Callable
     func closeScreen() {
         DispatchQueue.main.async { [self] in
@@ -89,7 +104,9 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
-    /// Low Power Mode and the device's heat level, so Godot can lower its frame rate.
+    /// Low Power Mode and the device's heat level, so Godot's PowerManager can lower its frame rate.
+    ///
+    /// - Returns: "critical", "thermal" (hot), "low_power" or "normal".
     @Callable
     func powerState() -> String {
         let info = ProcessInfo.processInfo
@@ -100,6 +117,10 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
+    /// Shows the native button bar, or updates it if it is already shown.
+    ///
+    /// - Parameter buttonsJson: the buttons, a JSON array of {id, title, symbol, selected, menu} (see
+    /// NativeToolbar.swift).
     @Callable
     func showToolbar(buttonsJson: String) {
         DispatchQueue.main.async { [self] in
@@ -120,6 +141,9 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
+    /// Sends a new button list to the bar (a toggle changed, for example).
+    ///
+    /// - Parameter buttonsJson: the buttons as JSON.
     @Callable
     func updateToolbar(buttonsJson: String) {
         DispatchQueue.main.async { [self] in
@@ -127,6 +151,7 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
+    /// Takes the bar off the window (used if it did not come up, so Godot's own bar is used).
     @Callable
     func hideToolbar() {
         DispatchQueue.main.async { [self] in
@@ -138,8 +163,11 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
-    /// Development aid: make the same edit a tap in the screen would (goes through the model, so
-    /// value_changed is emitted), to test the Swift -> Godot path without clicking.
+    /// Development aid: makes the same edit a tap in the screen would (it goes through the model, so `valueChanged`
+    /// is emitted), to test the Swift to Godot path without clicking.
+    ///
+    /// - Parameter key: the value's key.
+    /// - Parameter valueJson: the new value as JSON.
     @Callable
     func debugEdit(key: String, valueJson: String) {
         DispatchQueue.main.async { [self] in
@@ -151,8 +179,10 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         }
     }
 
-    /// Development aid (macOS): save a picture of the screen's window to `path`, so it can be looked at
-    /// without capturing the whole desktop.
+    /// Development aid (macOS): saves a picture of the screen's window, so it can be looked at without capturing the
+    /// whole desktop.
+    ///
+    /// - Parameter path: where to save the PNG.
     @Callable
     func debugSnapshot(path: String) {
         DispatchQueue.main.async { [self] in

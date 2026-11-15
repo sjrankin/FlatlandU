@@ -3,26 +3,44 @@ extends Node3D
 ## Start-up banner (as in FlatlandView): the program name, version and copyright as extruded text
 ## that circles the globe for three full rotations. A click anywhere fades it out over one second.
 
+## Emitted when the banner has faded out and is about to remove itself.
 signal finished
 
+## How many full turns the banner makes round the globe.
 const ROTATIONS := 3
-const SECONDS_PER_ROTATION := 6.0 / (0.7 * 0.85 * 0.85)   # 30%, 15%, then another 15% slower than the original 6 s
+## Seconds for one turn (slower than the original 6 s by 30%, then 15%, then another 15%).
+const SECONDS_PER_ROTATION := 6.0 / (0.7 * 0.85 * 0.85)
+## Fade-out time when the user dismisses the banner.
 const CLICK_FADE_SECONDS := 1.0
+## Fade-out time when the banner has finished its turns and goes away on its own.
 const AUTO_FADE_SECONDS := 6.0
+## Overall size factor for the text.
 const TEXT_SCALE := 1.15
-## Three full turns, plus the quarter turn from the starting limb to face the viewer.
+## The angle the banner travels in all: three full turns plus the quarter turn from the starting limb to face the
+## viewer.
 const TOTAL_TRAVEL := TAU * ROTATIONS + PI / 2.0
-const RING_RADIUS := 14.5   # well outside the hour labels (radius 11.5)
+## Radius of the ring the text sits on, well outside the hour labels (radius 11.5).
+const RING_RADIUS := 14.5
 
-var _lines: Array = []   # {y, half_angle, half_height} for each line, used by occludes()
-## When false (shown from the Welcome button) the text stays, facing the viewer, until it is dismissed.
+## One entry per line of text, {y, half_angle, half_height}, describing where it is on the ring, so [method occludes]
+## can tell if a ray passes through it.
+var _lines: Array = []
+## When true the banner fades away on its own after its turns; when false (shown from the Welcome button) it stays,
+## facing the viewer, until dismissed.
 var auto_fade := true
-var _angle := 0.0   # radians travelled; the banner starts at the right-hand limb and moves left
+## Radians travelled so far; the banner starts at the right-hand limb and moves left.
+var _angle := 0.0
+## True once [method dismiss] has started the fade.
 var _fading := false
+## The text materials (one per line), faded together by [method dismiss].
 var _materials: Array[StandardMaterial3D] = []
+## The materials of the shadow-only copies of the text (they dither by alpha so shadows fade with the text).
 var _shadow_materials: Array[StandardMaterial3D] = []
+## The node the lines are children of; it is turned to move the banner round the globe.
 var _ring: Node3D
 
+## Creates the three lines: FLATLAND (large, red), version/build/date (gold) and the copyright (cyan), with
+## [method _add_line].
 func _ready() -> void:
 	_ring = Node3D.new()
 	add_child(_ring)
@@ -35,6 +53,14 @@ func _ready() -> void:
 	for line in lines:
 		_add_line(line[0], line[1], line[2], line[3], line[4])
 
+## Builds one line of extruded text bent round the ring, plus a shadows-only copy whose material dithers by alpha so
+## the shadow fades with the text.
+##
+## [param text]: the words.
+## [param color]: the text color.
+## [param size]: size factor (1.0 normal).
+## [param y]: height of the line on the ring.
+## [param bold]: unused; every line uses the heavy font (synthetic emboldening breaks glyph outlines).
 func _add_line(text: String, color: Color, size: float, y: float, bold: bool) -> void:
 	var tm := TextMesh.new()
 	tm.text = text
@@ -73,6 +99,10 @@ func _add_line(text: String, color: Color, size: float, y: float, bold: bool) ->
 	caster.position = mi.position
 	_ring.add_child(caster)
 
+## Moves the banner round the globe until it reaches its final position facing the viewer, then (if
+## [member auto_fade]) starts the fade.
+##
+## [param delta]: seconds since the last frame.
 func _process(delta: float) -> void:
 	if _fading:
 		return
@@ -83,7 +113,13 @@ func _process(delta: float) -> void:
 	if _angle >= TOTAL_TRAVEL and auto_fade:
 		dismiss(AUTO_FADE_SECONDS)   # now facing the viewer: fade away on its own
 
-## True if the ray (from `origin` along `dir`, in world space) passes through one of the text lines.
+## Whether a ray passes through one of the lines of text. Used so mouse hover and clicks do not reach the globe
+## through the text. It intersects the ray with the cylinder the text is wrapped on and tests each line's angle and
+## height.
+##
+## [param origin]: ray start, in world space.
+## [param dir]: ray direction, in world space.
+## Returns: true if the ray hits text (false once the text is nearly faded).
 func occludes(origin: Vector3, dir: Vector3) -> bool:
 	if _fading and _materials[0].albedo_color.a < 0.1:
 		return false
@@ -110,7 +146,10 @@ func occludes(origin: Vector3, dir: Vector3) -> bool:
 				return true
 	return false
 
-## Fade the banner out (1 second when the user clicks), then remove it.
+## Fades the banner out (text, glow and shadow), then removes it with [method _remove]. Does nothing if already
+## fading.
+##
+## [param seconds]: fade time (default [constant CLICK_FADE_SECONDS]).
 func dismiss(seconds: float = CLICK_FADE_SECONDS) -> void:
 	if _fading:
 		return
@@ -123,6 +162,7 @@ func dismiss(seconds: float = CLICK_FADE_SECONDS) -> void:
 		tween.tween_property(mat, "albedo_color:a", 0.0, seconds)
 	tween.chain().tween_callback(_remove)
 
+## Emits [signal finished] and frees the banner.
 func _remove() -> void:
 	finished.emit()
 	queue_free()

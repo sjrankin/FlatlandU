@@ -1,13 +1,22 @@
 extends SplitContainer
 ## Map chooser (Flatland's map preference panel): grouped list of every map plus a preview.
 
+## Emitted when the user picks a map (the setting is already saved).
+##
+## [param map_name]: the map's name, as stored in the `map_type` setting.
 signal map_chosen(map_name: String)
 
+## The grouped list of maps.
 var _tree: Tree
+## The picture of the selected map.
 var _preview: TextureRect
+## Text under the preview: the map's name and file.
 var _caption: Label
+## File name of the preview being shown; the preview updates when [signal MapCatalog.texture_ready] reports that file.
 var _preview_file := ""
 
+## Builds the picker: a Tree of maps grouped by [method MapCatalog.group_for] beside (above, on phones) a preview and
+## caption. Selects the current map, and connects selection and texture arrival.
 func _ready() -> void:
 	_tree = Tree.new()
 	_tree.hide_root = true
@@ -58,6 +67,8 @@ func _ready() -> void:
 		if file == _preview_file and is_instance_valid(_preview):
 			_preview.texture = tex)
 
+## The user selected or double-clicked a map: shows its preview, saves it as the `map_type` setting and emits
+## [signal map_chosen]. Group headings do nothing.
 func _on_selected() -> void:
 	var it := _tree.get_selected()
 	if it == null or it.get_metadata(0) == null:
@@ -67,6 +78,9 @@ func _on_selected() -> void:
 	Settings.set_value("map_type", m["name"])
 	map_chosen.emit(m["name"])
 
+## Shows a map's globe image (loading it with [method MapCatalog.request] if needed) and caption.
+##
+## [param m]: the map Dictionary.
 func _show_preview(m: Dictionary) -> void:
 	_preview_file = str(m["globe"])
 	_caption.text = "%s  (%s)" % [m["name"], _preview_file]

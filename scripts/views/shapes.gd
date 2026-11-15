@@ -2,10 +2,18 @@ class_name Shapes
 extends RefCounted
 ## Mesh and material helpers for the city and earthquake shapes (Flatland's ShapeManager).
 
+## Outlined block materials already made, by color and night flag, so each is built once ([method outline_material]).
 static var _outline_cache: Dictionary = {}
+## Plain materials already made, by color, so each is built once ([method plain]).
 static var _plain_cache: Dictionary = {}
 
-## Four-sided pyramid with its base centered at the origin and its apex at +Y.
+## Builds a four-sided pyramid with its base centered at the origin and its apex at +Y (used for pyramid-shaped cities
+## and earthquakes).
+##
+## [param width]: base size along X.
+## [param height]: height along Y.
+## [param length]: base size along Z.
+## Returns: the ArrayMesh, with generated normals.
 static func pyramid_mesh(width: float, height: float, length: float) -> ArrayMesh:
 	var hw := width * 0.5
 	var hl := length * 0.5
@@ -22,11 +30,18 @@ static func pyramid_mesh(width: float, height: float, length: float) -> ArrayMes
 	st.generate_normals()
 	return st.commit()
 
-## Complementary hue, used for city stems.
+## The color on the opposite side of the color wheel (hue turned by half), used for city stems.
+##
+## [param c]: the color.
+## Returns: the complementary color, with the same saturation and value.
 static func complement(c: Color) -> Color:
 	return Color.from_hsv(fposmod(c.h + 0.5, 1.0), c.s, c.v)
 
-## Opaque lit material (no day/night glow), cached by color and alpha.
+## An opaque, lit material of one color (no day/night glow). Alpha below 1 makes it transparent. Materials are cached
+## by color.
+##
+## [param color]: the color (with alpha).
+## Returns: the StandardMaterial3D.
 static func plain(color: Color) -> StandardMaterial3D:
 	var key := color.to_html()
 	if _plain_cache.has(key):
@@ -40,8 +55,13 @@ static func plain(color: Color) -> StandardMaterial3D:
 	_plain_cache[key] = m
 	return m
 
-## The outlined block texture tinted with a color (Flatland's MakeOutlineCubeTexture): the color shows
-## through the transparent parts of BlockTexture2 and the outline is drawn over it.
+## The outlined block look for cities (Flatland's MakeOutlineCubeTexture): the color shows through the transparent
+## parts of `BlockTexture2.png` and the outline is drawn over it. The night version also glows a little, so the block
+## can be seen in the dark. Cached.
+##
+## [param color]: the block's color.
+## [param night]: true for the glowing night version.
+## Returns: the StandardMaterial3D.
 static func outline_material(color: Color, night: bool = false) -> StandardMaterial3D:
 	var key := "%s|%s" % [color.to_html(), night]
 	if _outline_cache.has(key):
@@ -65,14 +85,23 @@ static func outline_material(color: Color, night: bool = false) -> StandardMater
 	_outline_cache[key] = m
 	return m
 
+## The size factor for a shape-scale setting.
+##
+## [param setting]: the key of a scale setting ("city_scale" or "quake_scale").
+## Returns: 0.5 for "Small", 1.5 for "Large", otherwise 1.0.
 static func scale_for(setting: String) -> float:
 	match Settings.get_string(setting):
 		"Small": return 0.5
 		"Large": return 1.5
 	return 1.0
 
-## Bend flat extruded text around a sphere of `radius` whose center lies at local (0, 0, -radius), so
-## the text follows the curvature of the Earth instead of sticking out in a straight line.
+## Bends flat extruded text around a sphere, so it follows the curvature of the Earth (or of the ring the welcome text
+## travels on) instead of sticking out in a straight line. The sphere's center lies at local (0, 0, -radius) of the
+## text. Vertices, normals and tangents are all rotated.
+##
+## [param tm]: the TextMesh holding the text.
+## [param radius]: the sphere's radius.
+## Returns: a new ArrayMesh with the bent text, or the original TextMesh if it has no geometry.
 static func bend_text(tm: TextMesh, radius: float) -> Mesh:
 	var arrays := tm.get_mesh_arrays()
 	if arrays.is_empty() or arrays[Mesh.ARRAY_VERTEX] == null:

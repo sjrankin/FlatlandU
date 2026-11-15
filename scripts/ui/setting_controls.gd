@@ -8,30 +8,47 @@ extends RefCounted
 # itself to `recorded_pages`. The native Preferences (see NativeUI) is built from that description, so
 # the settings are defined once, in prefs_dialog.gd, and both user interfaces stay in step.
 
+## True while the native Preferences screen is being described: every control built through this class also records a
+## plain description of itself in [member recorded_pages]. See [method begin_recording].
 static var recording := false
-static var recorded_pages: Array = []   # [{title, items: [ {type, key, title, ...} ]}]
+## The recorded description: [{title, items: [{type, key, title, ...}]}]. The native Preferences (see [NativeUI]) is
+## made from it, so the settings are defined once, in prefs_dialog.gd, and both user interfaces stay in step.
+static var recorded_pages: Array = []
+## The page that [method record_item] is currently adding items to.
 static var _recording_page: Dictionary = {}
 
+## Starts recording: clears [member recorded_pages] and turns [member recording] on. Call before building the
+## Preferences controls.
 static func begin_recording() -> void:
 	recording = true
 	recorded_pages = []
 	_recording_page = {}
 
+## Stops recording (the result stays in [member recorded_pages]).
 static func end_recording() -> void:
 	recording = false
 
-## Start a recorded page by hand (for pages not built with page()).
+## Starts a recorded page by hand, for pages not built with [method page]. Does nothing unless recording.
+##
+## [param title]: the page title.
 static func record_page(title: String) -> void:
 	if recording:
 		_recording_page = {"title": title, "items": []}
 		recorded_pages.append(_recording_page)
 
+## Adds an item to the current recorded page. Does nothing unless recording and a page has been started.
+##
+## [param item]: the item Dictionary, e.g. {"type": "toggle", "key": ..., "title": ...}.
 static func record_item(item: Dictionary) -> void:
 	if recording and not _recording_page.is_empty():
 		_recording_page["items"].append(item)
 
-## A labelled form row. On desktop the label sits left of the control; on a phone it sits above it,
-## so long labels and big text never fight over the width.
+## A form row with a label. On a desktop the label sits left of the control; on a phone it sits above it, so long
+## labels and big text never fight over the width.
+##
+## [param text]: the label text.
+## [param label_width]: the label's minimum width on a desktop, in pixels.
+## Returns: the row container; the caller adds the control to it.
 static func labeled_row(text: String, label_width: float) -> BoxContainer:
 	var row: BoxContainer = VBoxContainer.new() if Layout.is_phone() else HBoxContainer.new()
 	var lbl := Label.new()
@@ -44,6 +61,12 @@ static func labeled_row(text: String, label_width: float) -> BoxContainer:
 	row.add_child(lbl)
 	return row
 
+## A check box bound to a boolean setting: it shows the setting, writes changes at once and follows changes made
+## elsewhere.
+##
+## [param text]: the label.
+## [param key]: the setting's key.
+## Returns: the CheckBox. Records a "toggle" item when recording.
 static func check(text: String, key: String) -> CheckBox:
 	record_item({"type": "toggle", "key": key, "title": text})
 	var cb := CheckBox.new()
@@ -59,7 +82,12 @@ static func check(text: String, key: String) -> CheckBox:
 			cb.set_pressed_no_signal(bool(v)))
 	return cb
 
-## items: Array of [label, value].
+## A drop-down list bound to a setting.
+##
+## [param text]: the label.
+## [param key]: the setting's key.
+## [param items]: an Array of [label, value] pairs.
+## Returns: the row. Records a "choice" item when recording.
 static func option(text: String, key: String, items: Array) -> BoxContainer:
 	var opts: Array = []
 	for it in items:
@@ -84,6 +112,15 @@ static func option(text: String, key: String, items: Array) -> BoxContainer:
 	row.add_child(ob)
 	return row
 
+## A number box bound to a numeric setting (stored as an int if the setting is an int).
+##
+## [param text]: the label.
+## [param key]: the setting's key.
+## [param min_v]: smallest value.
+## [param max_v]: largest value.
+## [param step]: the step size.
+## [param suffix]: text after the number, such as " s".
+## Returns: the row. Records a "number" item when recording.
 static func spin(text: String, key: String, min_v: float, max_v: float, step: float, suffix: String = "") -> BoxContainer:
 	record_item({"type": "number", "key": key, "title": text, "min": min_v, "max": max_v, "step": step, "suffix": suffix})
 	var row := labeled_row(text, 150)
@@ -99,6 +136,10 @@ static func spin(text: String, key: String, min_v: float, max_v: float, step: fl
 	row.add_child(sb)
 	return row
 
+## A section heading label.
+##
+## [param text]: the heading.
+## Returns: the Label. Records a "section" item when recording.
 static func section(text: String) -> Label:
 	record_item({"type": "section", "title": text})
 	var l := Label.new()
@@ -107,6 +148,11 @@ static func section(text: String) -> Label:
 	l.add_theme_color_override("font_color", Color("#8fb8ff"))
 	return l
 
+## Adds a scrolling page to a tab container (a Preferences tab) and starts recording it.
+##
+## [param parent]: the TabContainer.
+## [param title]: the tab's title.
+## Returns: the VBoxContainer inside the page, to which the controls are added.
 static func page(parent: TabContainer, title: String) -> VBoxContainer:
 	record_page(title)
 	var scroll := ScrollContainer.new()
@@ -125,6 +171,11 @@ static func page(parent: TabContainer, title: String) -> VBoxContainer:
 	parent.add_child(scroll)
 	return box
 
+## A color button bound to a color setting (stored as "#rrggbb").
+##
+## [param text]: the label.
+## [param key]: the setting's key.
+## Returns: the row. Records a "color" item when recording.
 static func color(text: String, key: String) -> BoxContainer:
 	record_item({"type": "color", "key": key, "title": text})
 	var row := labeled_row(text, 220)
@@ -139,7 +190,11 @@ static func color(text: String, key: String) -> BoxContainer:
 	row.add_child(cp)
 	return row
 
-## Font chooser listing the fonts installed on this system.
+## A font chooser that lists the fonts installed on this system, with "Default" first (the empty setting).
+##
+## [param text]: the label.
+## [param key]: the setting's key.
+## Returns: the row. Records a "choice" item when recording.
 static func font_picker(text: String, key: String) -> BoxContainer:
 	var font_opts: Array = [{"label": "Default", "value": ""}]
 	var names := Array(OS.get_system_fonts())

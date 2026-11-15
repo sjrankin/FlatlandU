@@ -1,8 +1,11 @@
 extends Window
 ## Status of the asynchronous data Flatland retrieves (Flatland's Live Data Status view).
 
+## Two-column grid of heading and value labels.
 var _grid: GridContainer
 
+## Builds the window: the grid of rows, a Refresh Now button (runs [method QuakeService.refresh]) and a Close button;
+## refreshes the rows when quakes update or a fetch fails and each time it opens.
 func _ready() -> void:
 	title = "Live Data Status"
 	size = Vector2i(640, 260)
@@ -33,7 +36,10 @@ func _ready() -> void:
 	about_to_popup.connect(update_rows)
 	update_rows()
 
-## The label/value pairs shown (the same for the Godot and the native screen).
+## The label/value pairs shown: source, URL, enabled, fetch interval, last retrieved, status and earthquake counts.
+## The Godot and native versions share them.
+##
+## Returns: an Array of [heading, value] pairs of text.
 func _rows() -> Array:
 	var last := "never"
 	if QuakeService.last_fetch_unix > 0.0:
@@ -46,6 +52,7 @@ func _rows() -> Array:
 			["Earthquakes in feed", str(QuakeService.quakes.size())],
 			["Earthquakes displayed", str(QuakeService.visible_quakes().size())]]
 
+## Rebuilds the grid from [method _rows] and tells NativeUI the data changed so the native screen updates too.
 func update_rows() -> void:
 	NativeUI.refresh(self)
 	for c in _grid.get_children():
@@ -66,6 +73,10 @@ func update_rows() -> void:
 
 # MARK: - Native (SwiftUI) version; see NativeUI
 
+## Describes this dialog for the native (SwiftUI/Compose) screen: an info row per [method _rows] entry and a "Refresh
+## Now" button. See [NativeUI].
+##
+## Returns: {"screen": ..., "values": {}}.
 func native_screen() -> Dictionary:
 	var items: Array = []
 	for row in _rows():
@@ -73,6 +84,11 @@ func native_screen() -> Dictionary:
 	items.append({"type": "action", "id": "refresh", "title": "Refresh Now", "style": "prominent"})
 	return {"screen": {"title": "Live Data Status", "pages": [{"title": "Live Data", "items": items}]}, "values": {}}
 
+## Handles an event from the native screen; the "refresh" action runs [method QuakeService.refresh].
+##
+## [param kind]: "value", "action" or "closed".
+## [param key]: the control or button id.
+## [param _value]: the new value (unused here).
 func native_event(kind: String, key: String, _value: Variant) -> void:
 	if kind == "action" and key == "refresh":
 		QuakeService.refresh()

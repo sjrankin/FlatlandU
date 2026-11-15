@@ -5,18 +5,34 @@ extends RefCounted
 ##
 ## Usage: open(path, width, height), add_frame(jpeg_bytes, time_ms) for each picture, then finish().
 
-const MAX_BYTES := 3_800_000_000      # the file's offsets are 32 bits; stop before they run out
-const TIMESCALE := 1000               # time units a second (milliseconds)
+## The file may not grow past this (3.8 GB): QuickTime's frame offsets are 32 bits. [method has_room] turns false at
+## this size so the recorder stops in time.
+const MAX_BYTES := 3_800_000_000
+## Time units per second in the movie (1000, so times are in milliseconds).
+const TIMESCALE := 1000
 
+## The open movie file; null before [method open] and after [method finish].
 var _file: FileAccess
+## Movie width in pixels, written into the index.
 var _width := 0
+## Movie height in pixels, written into the index.
 var _height := 0
+## Byte size of each frame's JPEG, in order (the "stsz" table).
 var _sizes := PackedInt32Array()
+## File position of each frame's JPEG, in order (the "stco" table).
 var _offsets := PackedInt32Array()
-var _times := PackedInt64Array()       # when each frame is shown, in milliseconds from the first
+## When each frame is shown, in milliseconds from the first frame; the index turns these into per-frame durations.
+var _times := PackedInt64Array()
+## File position of the "mdat" atom's size field (right after the 20-byte "ftyp" atom), patched in [method finish]
+## once the data size is known.
 var _mdat_start := 20
 
-## Returns OK, or the error that stopped the file being created.
+## Creates the movie file and writes its header: a "ftyp" atom and an "mdat" atom whose size is filled in later.
+##
+## [param path]: where to write the .mov file.
+## [param width]: frame width in pixels.
+## [param height]: frame height in pixels.
+## Returns: OK, or the error that stopped the file being created.
 func open(path: String, width: int, height: int) -> int:
 	_file = FileAccess.open(path, FileAccess.WRITE)
 	if _file == null:
@@ -31,13 +47,22 @@ func open(path: String, width: int, height: int) -> int:
 	_atom_header(8, "mdat")            # the size is filled in when the movie is finished
 	return OK
 
+## How many frames have been added.
+##
+## Returns: the count.
 func frame_count() -> int:
 	return _sizes.size()
 
-## False once the file is as big as it may get.
+## Whether more frames may be added.
+##
+## Returns: false when no file is open or it has reached [constant MAX_BYTES].
 func has_room() -> bool:
 	return _file != null and _file.get_position() < MAX_BYTES
 
+## Appends one picture to the movie data and remembers its size, position and time for the index.
+##
+## [param jpeg]: the frame, as JPEG bytes (all frames must be the size given to [method open]).
+## [param time_ms]: when this frame appears, in milliseconds since the first frame.
 func add_frame(jpeg: PackedByteArray, time_ms: int) -> void:
 	if _file == null:
 		return
@@ -46,7 +71,11 @@ func add_frame(jpeg: PackedByteArray, time_ms: int) -> void:
 	_times.append(time_ms)
 	_file.store_buffer(jpeg)
 
-## Writes the index and closes the file. Returns true if the movie has at least one frame.
+## Ends the movie: patches the "mdat" size, appends the index ([method _moov]) and closes the file.
+##
+## [param end_time_ms]: the recording's length in milliseconds (currently unused: the last frame is shown for as long
+##   as the one before it).
+## Returns: true if the movie has at least one frame, false if it is empty (then no index is written).
 func finish(end_time_ms: int) -> bool:
 	if _file == null:
 		return false
@@ -63,37 +92,68 @@ func finish(end_time_ms: int) -> bool:
 
 # MARK: - Atoms
 
+## Writes an atom's size and four-letter name straight to the file.
+##
+## [param size]: the atom's total size in bytes, including this 8-byte header.
+## [param kind]: the four-letter atom name, like "ftyp".
 func _atom_header(size: int, kind: String) -> void:
 	_file.store_32(size)
 	_file.store_buffer(kind.to_ascii_buffer())
 
-## An atom as bytes: size, name, then the pieces.
+## Builds an atom in memory: size, name, then the contents.
+##
+## [param kind]: the four-letter atom name.
+## [param body]: the atom's contents.
+## Returns: the complete atom as bytes.
 func _atom(kind: String, body: PackedByteArray) -> PackedByteArray:
 	var out := _be(body.size() + 8, 4)
 	out.append_array(kind.to_ascii_buffer())
 	out.append_array(body)
 	return out
 
+## A whole number as big-endian bytes (QuickTime files store numbers most significant byte first).
+##
+## [param value]: the number.
+## [param bytes]: how many bytes to use (1, 2, 4 or 8).
+## Returns: the bytes.
 func _be(value: int, bytes: int) -> PackedByteArray:
 	var out := PackedByteArray()
 	for i in range(bytes - 1, -1, -1):
 		out.append((value >> (8 * i)) & 0xFF)
 	return out
 
+## A run of zero bytes (for reserved or empty fields).
+##
+## [param n]: how many.
+## Returns: the bytes.
 func _zeros(n: int) -> PackedByteArray:
 	var out := PackedByteArray()
 	out.resize(n)
 	return out
 
+## Joins byte arrays end to end.
+##
+## [param parts]: an Array of PackedByteArray.
+## Returns: the combined bytes.
 func _join(parts: Array) -> PackedByteArray:
 	var out := PackedByteArray()
 	for p in parts:
 		out.append_array(p)
 	return out
 
+## The identity transform matrix that "mvhd" and "tkhd" atoms contain: nine 32-bit values (36 bytes) that leave the
+## picture unrotated and unscaled.
+##
+## Returns: the bytes.
 func _matrix() -> PackedByteArray:
 	return _join([_be(0x00010000, 4), _zeros(12), _be(0x00010000, 4), _zeros(12), _be(0x40000000, 4)])    # nine 32-bit values
 
+## Builds the movie index (the "moov" atom): the movie header, and one video track whose sample tables list every
+## frame's duration ("stts"), size ("stsz") and file position ("stco"). Frames that last the same time share one
+## "stts" entry. Frame durations come from the recorded times, so slow moments play back at the right speed.
+##
+## [param end_time_ms]: the recording's length in milliseconds (the real duration is the sum of the frame durations).
+## Returns: the atom's bytes.
 func _moov(end_time_ms: int) -> PackedByteArray:
 	var n := _sizes.size()
 	var duration := maxi(1, end_time_ms)

@@ -10,8 +10,18 @@ import com.flatland.nativeui.ScreenRoot
 import com.flatland.nativeui.ScreenSchema
 import com.flatland.nativeui.valueText
 
-/** Shows a hard-coded screen (one of every kind of item) and logs what the user does, tag "NativeUISample". */
+/**
+ * Shows a hard-coded screen (one of every kind of item) and logs what the user does, with the log tag
+ * "NativeUISample". It is for trying the Android native screens without Godot.
+ */
 class SampleActivity : ComponentActivity() {
+    /**
+     * Builds the sample screen's JSON (a switch, two choices, a number, a color, a text field, buttons, info and list
+     * rows, a monospaced paragraph), makes a [ScreenModel] that logs each edit and action, and shows it with
+     * [ScreenRoot]. Done closes the activity.
+     *
+     * @param savedInstanceState the saved state (unused).
+     */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val options = (1..20).joinToString(",") { """{"label":"Option $it","value":"o$it","group":"${if (it <= 10) "First" else "Second"}"}""" }

@@ -4,65 +4,124 @@ extends Control
 ## drawn by `FlatView` into an off-screen picture, which is shown on a plane that the user can tilt and turn by
 ## dragging. The sun floats above the plane and casts a shadow on the map.
 
+## Emitted as the mouse moves over the map (or leaves it). Re-emitted from the 2D [FlatView] and from
+## [method _gui_input].
+##
+## [param lat]: latitude under the mouse (0 when not over the map).
+## [param lon]: longitude under the mouse.
+## [param over_map]: true if over the map plane.
 signal hover_changed(lat: float, lon: float, over_map: bool)
+## Emitted on a right click on the map, so main.gd can show the What's Here popup.
+##
+## [param lat]: the clicked latitude.
+## [param lon]: the clicked longitude.
 signal location_clicked(lat: float, lon: float)
 
+## Pixel size of the off-screen 2D picture for the polar maps (square).
 const POLAR_SIZE := Vector2i(2048, 2048)
+## Pixel size of the picture for the rectangular map (2:1 ratio, a little shorter for the labels).
 const RECT_SIZE := Vector2i(2048, 1130)
-const PLANE_WIDTH := 20.0          # world units
+## Width of the map plane in world units; everything on the stage is sized from it.
+const PLANE_WIDTH := 20.0
+## The stage camera's vertical field of view, in degrees.
 const CAMERA_FOV := 30.0
+## Lowest angle (12 degrees above the map) the camera can be tipped to.
 const MIN_PITCH := deg_to_rad(12.0)
+## Highest angle: looking straight down (90 degrees), the starting view.
 const MAX_PITCH := deg_to_rad(90.0)
-const SUN_HEIGHT_FRACTION := 0.16   # height of the sun above the plane, as a fraction of its width
-const SAT_HEIGHT := 1.8            # every satellite floats at this height over the map
+## Height of the Sun above the plane, as a fraction of the plane's width.
+const SUN_HEIGHT_FRACTION := 0.16
+## Every satellite floats at this height (world units) over the map.
+const SAT_HEIGHT := 1.8
+## Size factor of the satellite models on the map.
 const SAT_SCALE := 0.4
-const SUN_WIDTH_FRACTION := 0.055  # the sun picture (disc and glow), as a fraction of the plane width
+## The Sun picture's width (disc and glow) as a fraction of the plane's width.
+const SUN_WIDTH_FRACTION := 0.055
 
-## Room (screen pixels) the clock takes at the top and the status bar at the bottom; set by the main window.
+## Room in screen pixels that the clock takes at the top; set by main.gd so the map fits between the clock and the
+## status bar. Changing it re-fits the camera.
 var reserved_top := 90.0:
 	set(v):
 		if not is_equal_approx(v, reserved_top):
 			reserved_top = v
 			_apply_camera()
+## Room in screen pixels that the status bar (and toolbar) take at the bottom; set by main.gd. Changing it re-fits the
+## camera.
 var reserved_bottom := 80.0:
 	set(v):
 		if not is_equal_approx(v, reserved_bottom):
 			reserved_bottom = v
 			_apply_camera()
 
+## The flat map shown ([constant Settings.VIEW_FLAT_NORTH], [constant Settings.VIEW_FLAT_SOUTH] or
+## [constant Settings.VIEW_RECT]); change it with [method set_view].
 var view_type := Settings.VIEW_FLAT_NORTH
 
+## The 2D map ([FlatView], in [member FlatView.stage_mode]) drawn into [member _picture_vp].
 var _flat: FlatView
+## Off-screen viewport the 2D map is drawn into; its image is the texture of [member _plane].
 var _picture_vp: SubViewport
+## Container that shows the 3D stage on screen.
 var _container: SubViewportContainer
+## The 3D stage's viewport: plane, Sun, objects and camera.
 var _stage_vp: SubViewport
+## The stage camera, orbiting above the plane ([method _apply_camera]).
 var _camera: Camera3D
+## The flat plane that carries the map picture.
 var _plane: MeshInstance3D
+## The plane's shader material (`shaders/flat_map.gdshader`), fed the picture.
 var _plane_mat: ShaderMaterial
+## The Sun, a camera-facing sprite floating above the sub-solar point.
 var _sun: Sprite3D
+## A point light at the Sun, so shadows point away from it.
 var _sun_light: OmniLight3D
+## Parent of the extruded hour labels.
 var _hours_root: Node3D
+## Parent of the 3D city shapes.
 var _cities_root: Node3D
+## Parent of the 3D earthquake shapes.
 var _quakes_root: Node3D
+## Parent of the satellite models.
 var _sats_root: Node3D
+## The hour label nodes made by [method _update_hours]: {node, depth}.
 var _hour_items: Array = []
+## A text summary of what the hour labels show; they are rebuilt only when it changes.
 var _hour_key := ""
+## The city nodes made by [method _update_cities]: {node, lat, lon}.
 var _city_items: Array = []
+## A summary of the city settings; the city shapes are rebuilt only when it changes.
 var _city_key := ""
+## The earthquake nodes made by [method _update_quakes]: {node, lat, lon}.
 var _quake_items: Array = []
+## A summary of the earthquake settings and ids; the shapes are rebuilt only when it changes.
 var _quake_key := ""
-var _sun_point: MeshInstance3D       # the ball under the sun (SolarLunarMarker)
-var _moon_point: MeshInstance3D      # the ball under the moon
+## The ball under the Sun (see SolarLunarMarker); created on first use.
+var _sun_point: MeshInstance3D
+## The ball under the Moon.
+var _moon_point: MeshInstance3D
+## Satellite models by NORAD id, as made by [method SatelliteModel.build].
 var _sat_items: Dictionary = {}
+## Materials by color, so each color is made once ([method _color_material]).
 var _material_cache: Dictionary = {}
+## Seconds since the cities and quakes were last re-checked; they are re-checked once a second.
 var _poll := 0.0
+## Pixel size of the current 2D picture ([constant POLAR_SIZE] or [constant RECT_SIZE]).
 var _picture_size := POLAR_SIZE
+## Camera angle round the map (radians); dragging sideways changes it.
 var _yaw := 0.0
+## Camera angle above the map (radians, [constant MIN_PITCH] to [constant MAX_PITCH]); dragging up and down changes
+## it.
 var _pitch := MAX_PITCH
-var _zoom := 1.0                   # 1 = the whole map fits
+## Camera distance factor: 1 means the whole map fits; 0.3 to 2.5.
+var _zoom := 1.0
+## True while the left mouse button is down on the map.
 var _dragging := false
+## The Tween animating [method reset_view].
 var _reset_tween: Tween
 
+## Builds the stage: the off-screen 2D map ([FlatView]), the 3D viewport with its environment, the plane, the root
+## nodes for hours, cities, quakes and satellites, the Sun light and sprite and the camera. Connects hover reports,
+## resizing and visibility (the off-screen picture stops updating while hidden), then shows the first view.
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	# The 2D map, drawn off screen.
@@ -137,6 +196,11 @@ func _ready() -> void:
 		_picture_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS if visible else SubViewport.UPDATE_DISABLED)
 	set_view(view_type)
 
+## Switches to another flat map: resizes the picture and plane, tells the 2D map, clears the cached 3D objects so they
+## are rebuilt, and returns the camera to the start view.
+##
+## [param type]: [constant Settings.VIEW_FLAT_NORTH], [constant Settings.VIEW_FLAT_SOUTH] or
+##   [constant Settings.VIEW_RECT].
 func set_view(type: String) -> void:
 	view_type = type
 	_picture_size = RECT_SIZE if type == Settings.VIEW_RECT else POLAR_SIZE
@@ -154,25 +218,34 @@ func set_view(type: String) -> void:
 	_quake_key = ""
 	_reset_camera_now()
 
+## Refreshes the 2D map (time, map choice, night shading); main.gd calls this when the clock changes.
 func refresh() -> void:
 	_flat.refresh()
 
+## The plane's height in world units (its width times the picture's aspect).
+##
+## Returns: world units.
 func _plane_height() -> float:
 	return PLANE_WIDTH * float(_picture_size.y) / float(_picture_size.x)
 
-## World position on the plane for a pixel of the 2D picture.
+## Converts a pixel of the 2D picture to a position on the plane.
+##
+## [param p]: pixel position in the picture.
+## Returns: the world position at height 0.
 func _picture_to_world(p: Vector2) -> Vector3:
 	return Vector3((p.x / _picture_size.x - 0.5) * PLANE_WIDTH, 0.0, (p.y / _picture_size.y - 0.5) * _plane_height())
 
 # MARK: - Camera
 
+## Puts the camera at the start view (looking straight down, whole map in view) at once.
 func _reset_camera_now() -> void:
 	_yaw = 0.0
 	_pitch = MAX_PITCH
 	_zoom = 1.0
 	_apply_camera()
 
-## Animate back to the straight-down view over one second (a double-click).
+## Animates the camera back to the straight-down view over one second (a double click), unwinding the turn the
+## shortest way.
 func reset_view() -> void:
 	if _reset_tween != null and _reset_tween.is_valid():
 		_reset_tween.kill()
@@ -182,13 +255,17 @@ func reset_view() -> void:
 	_reset_tween.tween_method(func(v: float) -> void: _pitch = v; _apply_camera(), _pitch, MAX_PITCH, 1.0)
 	_reset_tween.tween_method(func(v: float) -> void: _zoom = v; _apply_camera(), _zoom, 1.0, 1.0)
 
-## Distance at which the whole plane fits the space left between the clock and the status bar.
+## The camera distance at which the whole plane fits the space left between the clock and the status bar.
+##
+## Returns: world units.
 func _fit_distance() -> float:
 	var half := tan(deg_to_rad(CAMERA_FOV) * 0.5)
 	var avail_h := maxf(100.0, size.y - reserved_top - reserved_bottom)
 	var pixels_per_unit := minf(avail_h * 0.98 / _plane_height(), size.x * 0.98 / PLANE_WIDTH)
 	return size.y / (2.0 * half * pixels_per_unit)
 
+## Places the camera from [member _yaw], [member _pitch] and [member _zoom] (looking at the middle of the plane), and
+## shifts the view so the map is centered between the clock and the status bar.
 func _apply_camera() -> void:
 	if _camera == null:
 		return
@@ -201,6 +278,10 @@ func _apply_camera() -> void:
 	var visible_height := 2.0 * dist * tan(deg_to_rad(CAMERA_FOV) * 0.5)
 	_camera.v_offset = ((reserved_top - reserved_bottom) * 0.5) / maxf(1.0, size.y) * visible_height
 
+## Every frame while visible and drawing: updates the Sun, hour labels, cities, quakes, satellites and the Sun/Moon
+## balls. Cities and quakes are re-checked for changes once a second.
+##
+## [param _delta]: seconds since the last frame.
 func _process(_delta: float) -> void:
 	if not visible or not PowerManager.drawing():
 		return
@@ -215,7 +296,8 @@ func _process(_delta: float) -> void:
 	_update_satellites()
 	_update_solar_lunar_points()
 
-## The balls under the sun and the moon rest on the map at those points.
+## Places the balls under the Sun and Moon on the map at those points (created on first use, raised by their radius so
+## they rest on the map), each shown according to its setting.
 func _update_solar_lunar_points() -> void:
 	if _sun_point == null:
 		var r := PLANE_WIDTH * SolarLunarMarker.MAP_FRACTION
@@ -232,7 +314,8 @@ func _update_solar_lunar_points() -> void:
 	_sun_point.position = _picture_to_world(_flat.project(sun.x, sun.y)) + raise
 	_moon_point.position = _picture_to_world(_flat.project(moon.x, moon.y)) + raise
 
-## The sun hovers above the plane over the sub-solar point, with its shadow falling on the map.
+## Floats the Sun above the sub-solar point on the map and puts the Sun light there, so shadows fall away from it.
+## Hidden when `show_sun` is off.
 func _update_sun() -> void:
 	var show_sun := Settings.get_bool("show_sun")
 	_sun.visible = show_sun
@@ -247,6 +330,11 @@ func _update_sun() -> void:
 
 # MARK: - Input
 
+## Mouse handling: left drag turns and tips the map; double click resets the view; the wheel zooms; right click
+## reports the place ([signal location_clicked]); movement reports the hover ([signal hover_changed]); trackpad pinch
+## zooms.
+##
+## [param event]: the input event.
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -282,23 +370,37 @@ func _gui_input(event: InputEvent) -> void:
 		_zoom = clampf(_zoom / (event as InputEventMagnifyGesture).factor, 0.3, 2.5)
 		_apply_camera()
 
-## Two-finger pinch on a touch screen (driven by main.gd); see GlobeView.pinch_zoom.
+## True while two fingers are down, so the one-finger drag that Godot emulates from the first finger does not also
+## turn the map.
 var _pinching := false
 
+## main.gd tells the stage when a two-finger pinch starts or ends.
+##
+## [param on]: true while pinching.
 func set_pinching(on: bool) -> void:
 	_pinching = on
 
+## Two-finger pinch on a touch screen (driven by main.gd): zooms the camera unless the world is locked. See
+## [method GlobeView.pinch_zoom].
+##
+## [param factor]: greater than 1 when the fingers move apart (zoom in).
 func pinch_zoom(factor: float) -> void:
 	if Settings.get_bool("world_locked"):
 		return
 	_zoom = clampf(_zoom / factor, 0.3, 2.5)
 	_apply_camera()
 
+## When the mouse leaves the control, tells listeners it is no longer over the map.
+##
+## [param what]: the notification constant.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_MOUSE_EXIT:
 		hover_changed.emit(0.0, 0.0, false)
 
-## Latitude and longitude under a screen position (through the plane, wherever it is tilted).
+## Finds the place under a screen position by casting a ray through the plane, wherever the plane is tilted.
+##
+## [param screen]: position in pixels.
+## Returns: {"hit": false}, or the result of [method FlatView.pick] ({"hit": true, "lat", "lon"}).
 func _pick(screen: Vector2) -> Dictionary:
 	if _camera == null:
 		return {"hit": false}
@@ -316,8 +418,10 @@ func _pick(screen: Vector2) -> Dictionary:
 		return {"hit": false}
 	return _flat.pick(Vector2(u * _picture_size.x, v * _picture_size.y))
 
-## The sun's picture: a soft glow around a small disc, drawn the way the sun is drawn in the globe's sky (and
-## the splash screen). The glow is 50% opaque and the disc 75% opaque.
+## Draws the Sun's picture: a soft glow (50% opaque) round a small disc (75% opaque), in the style of the Sun in the
+## globe's sky.
+##
+## Returns: the 256 by 256 ImageTexture.
 static func _make_sun_texture() -> ImageTexture:
 	var n := 256
 	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
@@ -340,9 +444,15 @@ static func _make_sun_texture() -> ImageTexture:
 # MARK: - 3D objects on the map
 
 ## World units per pixel of the 2D picture.
+##
+## Returns: the factor.
 func _unit() -> float:
 	return PLANE_WIDTH / float(_picture_size.x)
 
+## A lit material of one color with a slight glow, cached.
+##
+## [param c]: the color.
+## Returns: the StandardMaterial3D.
 func _color_material(c: Color) -> StandardMaterial3D:
 	var key := c.to_html()
 	if not _material_cache.has(key):
@@ -355,11 +465,20 @@ func _color_material(c: Color) -> StandardMaterial3D:
 		_material_cache[key] = m
 	return _material_cache[key]
 
+## Frees all children of a node (queued).
+##
+## [param node]: the node to empty.
 func _clear(node: Node3D) -> void:
 	for child in node.get_children():
 		child.queue_free()
 
-## A mesh instance resting on the map (its base at height 0).
+## Makes a shape that rests on the map and casts a shadow.
+##
+## [param mesh]: the shape.
+## [param height]: the height of its center above the map (half its height, so its base is on the map).
+## [param mat]: its material.
+## [param offset_y]: extra height (default 0).
+## Returns: the MeshInstance3D.
 func _marker(mesh: Mesh, height: float, mat: Material, offset_y: float = 0.0) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
@@ -368,6 +487,11 @@ func _marker(mesh: Mesh, height: float, mat: Material, offset_y: float = 0.0) ->
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	return mi
 
+## Makes the mesh for a shape name.
+##
+## [param kind]: "box", "cylinder", "cone", "pyramid", "capsule" or "stick"; anything else gives a sphere.
+## [param size]: the shape's size.
+## Returns: the Mesh. See [method _shape_half_height].
 func _shape_mesh(kind: String, size: float) -> Mesh:
 	match kind:
 		"box":
@@ -409,7 +533,11 @@ func _shape_mesh(kind: String, size: float) -> Mesh:
 	s.height = size
 	return s
 
-## Half the height of a shape made by `_shape_mesh` (so it can rest on the map).
+## Half the height of a shape made by [method _shape_mesh], so it can rest on the map.
+##
+## [param kind]: the shape name.
+## [param size]: the size given to [method _shape_mesh].
+## Returns: half the height.
 func _shape_half_height(kind: String, size: float) -> float:
 	match kind:
 		"box": return size * 0.5
@@ -420,6 +548,9 @@ func _shape_half_height(kind: String, size: float) -> float:
 		"stick": return size * 1.2
 	return size * 0.5
 
+## The city shape name from the `city_shape` setting.
+##
+## Returns: "box", "cylinder", "pyramid", "stick" or "sphere", or "" for "Names" (names only, no 3D marker).
 func _city_kind() -> String:
 	var shape := Settings.get_string("city_shape")
 	if shape.contains("Names"):
@@ -434,6 +565,10 @@ func _city_kind() -> String:
 		return "stick"
 	return "sphere"
 
+## The earthquake shape name from the `quake_shape` setting.
+##
+## Returns: "arrow", "pyramid", "cone", "box", "cylinder", "capsule" or "sphere" (also for Pulsating Sphere and
+##   Tethered Magnitude).
 func _quake_kind() -> String:
 	var shape := Settings.get_string("quake_shape")
 	if shape.contains("Arrow"):
@@ -445,6 +580,9 @@ func _quake_kind() -> String:
 
 # --- hours: extruded 3D text lying on the map
 
+## Keeps the hour labels, extruded 3D text lying on the map, current: asks [method FlatView.hour_label_specs] what to
+## show, rebuilds the labels only if the text, color, kind or view changed, and places each one at its picture
+## position.
 func _update_hours() -> void:
 	var specs := _flat.hour_label_specs()
 	var color := Settings.get_color("color_hours_2d")
@@ -481,6 +619,10 @@ func _update_hours() -> void:
 
 # --- cities
 
+## Keeps the 3D city shapes current: when settings or the city list change (checked once a second, with
+## [param recheck]) it rebuilds them; every frame it moves each to its map position.
+##
+## [param recheck]: true on the once-a-second pass that looks for changes.
 func _update_cities(recheck: bool) -> void:
 	if recheck or _city_key == "":
 		var cities: Array = CityDB.filtered_cities() if Settings.get_bool("show_cities") else []
@@ -506,6 +648,10 @@ func _update_cities(recheck: bool) -> void:
 
 # --- earthquakes
 
+## Keeps the 3D earthquake shapes current, like [method _update_cities]: a shape (or an arrow) per visible quake,
+## sized by magnitude and colored by [method QuakeService.magnitude_color].
+##
+## [param recheck]: true on the once-a-second pass that looks for changes.
 func _update_quakes(recheck: bool) -> void:
 	if recheck or _quake_key == "":
 		var quakes: Array = QuakeService.visible_quakes() if Settings.get_bool("enable_earthquakes") else []
@@ -545,6 +691,9 @@ func _update_quakes(recheck: bool) -> void:
 
 # --- satellites: all at the same height over the map
 
+## Keeps the satellite models current: each tracked satellite is a model floating at [constant SAT_HEIGHT] over its
+## map position, turned along its track (with no heading across the map edge or a polar jump), with its label updated
+## when the altitude changes. Hidden when satellites are off.
 func _update_satellites() -> void:
 	var on := Settings.get_bool("show_satellites")
 	_sats_root.visible = on

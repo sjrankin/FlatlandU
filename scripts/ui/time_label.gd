@@ -1,6 +1,9 @@
 extends Label
 ## The large UTC/local time readout at the top (or bottom, for south-centered) of the view.
 
+## Builds the clock: centered, in the bundled Noto Sans (its digits are all the same width and its zero is plain,
+## unlike the system monospaced fonts), white with a black outline. Starts a 0.25 s timer that keeps the text current
+## and also updates it when any setting changes.
 func _ready() -> void:
 	horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	# Noto Sans (bundled): its digits are all the same width and its zero is plain, not crossed or dotted, which
@@ -19,7 +22,8 @@ func _ready() -> void:
 	Settings.changed.connect(func(_k: String, _v: Variant) -> void: update_text())
 	update_text()
 
-## The time grows with a big window (and is larger on a phone) so it stays easy to read.
+## Sizes the clock's text: larger in a big window (up to 2.5 times) and scaled by [method Layout.ui_scale] on phones,
+## so it stays easy to read. Called at start and whenever the window size changes.
 func _apply_size() -> void:
 	var size_px := 46.0
 	if Layout.is_phone():
@@ -29,6 +33,9 @@ func _apply_size() -> void:
 	add_theme_font_size_override("font_size", int(size_px))
 	custom_minimum_size.y = size_px * 1.3
 
+## Rewrites the clock text from the `time_label` setting: hidden for "None", otherwise UTC ("HH:MM:SS UTC") or local
+## time with the zone name, with or without seconds (`time_label_seconds`). Uses [method Solar.now], so the debugger's
+## clock changes show here.
 func update_text() -> void:
 	var mode := Settings.get_string("time_label")
 	visible = mode != "None"

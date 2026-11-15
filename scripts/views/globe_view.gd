@@ -3,126 +3,268 @@ extends Node3D
 ## The sun is fixed in the scene and the Earth turns beneath it according to UTC, exactly as
 ## Flatland does. The globe is lit by a sun light and, optionally, a cyan moon light.
 
+## Emitted as the mouse moves over the globe (when `mouse_tracking` is on) and when it leaves.
+##
+## [param lat]: latitude under the mouse (0 when not over the globe).
+## [param lon]: longitude under the mouse.
+## [param over_globe]: true if the mouse is over the Earth.
 signal hover_changed(lat: float, lon: float, over_globe: bool)
+## Emitted when the user asks "what's here" at a point on the Earth (from the context menu); main.gd shows the popup.
+##
+## [param lat]: the latitude.
+## [param lon]: the longitude.
 signal location_clicked(lat: float, lon: float)
-## The user asked for the context menu (right click, or a long press on a phone) at this point of the view.
+## The user asked for the context menu (right click, or a long press on a phone or tablet) at a point of the view.
+## main.gd builds and shows the menu.
+##
+## [param position]: where in the view, in pixels.
 signal context_requested(position: Vector2)
 
+## The Earth's radius in scene units (10), from [constant Geo.GLOBE_RADIUS]. Almost every size in this file is
+## relative to it.
 const R := Geo.GLOBE_RADIUS
 # Camera as in FlatlandView: a perspective camera 175 units away with a roughly 9 to 10 degree field of view
 # (nearly orthographic). FlatlandView stops zooming at 60 (Defaults.ClosestZ); here the user can go in to 20.
+## The camera's normal distance from the Earth's center: 175 units, as in FlatlandView, with a narrow field of view
+## (nearly orthographic). Reset View returns here.
 const DEFAULT_DISTANCE := 175.0
+## Closest the user can zoom (FlatlandView stops at 60; here the user can go in to 20).
 const MIN_DISTANCE := 20.0
+## Farthest the user can zoom.
 const MAX_DISTANCE := 500.0
 # Hour labels are fully opaque at and beyond FADE_START_DISTANCE and fade smoothly to
 # HOUR_MIN_ALPHA as the camera zooms in to FADE_END_DISTANCE, so they don't block the surface.
+## Hour labels are fully opaque at and beyond this camera distance (see [method _hour_alpha_for_distance]).
 const HOUR_FADE_START_DISTANCE := 110.0
+## Hour labels reach their minimum opacity at this camera distance, so they do not block the surface when zoomed in.
 const HOUR_FADE_END_DISTANCE := 45.0
+## The lowest opacity the hour labels fade to when zoomed in.
 const HOUR_MIN_ALPHA := 0.3
+## The camera's vertical field of view in degrees in the normal (orbit) view: 9, nearly orthographic.
 const CAMERA_FOV := 9.0
 
-var _system: Node3D                # tilted by the sun's declination
-var _earth: Node3D                  # rotates with the Earth (map, grid, cities, quakes)
+## Parent of the Earth and the sun-fixed objects; tilted by the Sun's declination (the seasons) so the Sun stays
+## directly behind the viewer.
+var _system: Node3D
+## Rotates with the Earth: the map, grid, cities, quakes, satellites, hour labels that turn with the Earth.
+var _earth: Node3D
+## The Earth sphere carrying the map.
 var _earth_mesh: MeshInstance3D
+## The Earth's shader material (`shaders/earth.gdshader`): day/night shading and the map.
 var _earth_mat: ShaderMaterial
+## A sea-colored sphere just under the map, for maps with transparent seas (shown only when the map has a sea file).
 var _sea_mesh: MeshInstance3D
+## The sea sphere's shader material.
 var _sea_mat: ShaderMaterial
+## The shader materials of the cubic Earth's six faces (given the Sun direction like the Earth's).
 var _cube_mats: Array[ShaderMaterial] = []
+## File name of the current map's sea picture ("" if none).
 var _sea_file := ""
-var _fixed: Node3D                  # stays with the sun (poles, noon meridians, solar hours)
-var _orbit: Node3D                  # camera pivot
+## Stays with the Sun and does not turn with the Earth: the poles, noon meridians and the fixed hour labels.
+var _fixed: Node3D
+## The camera pivot: rotated by [member _pitch] and [member _yaw] so the camera, a child at distance
+## [member _distance], orbits the Earth.
+var _orbit: Node3D
+## The camera. In orbit mode it sits on [member _orbit]; the special modes place it directly.
 var _camera: Camera3D
+## The Sun's directional light (casts the 3D shadows).
 var _sun: DirectionalLight3D
+## The faint cyan "moon light" that lights the night side slightly (the `show_moon_light` setting); not the Moon
+## itself.
 var _moon: DirectionalLight3D
-var _moon_body: MeshInstance3D       # the Moon itself, at its true distance and size (not the cyan moon light)
+## The Moon itself, at its true distance and size (not the cyan moon light).
+var _moon_body: MeshInstance3D
+## The Moon's current distance from the Earth's center in scene units (about 60 Earth radii); updated by
+## [method _place_moon].
 var _moon_distance := Lunar.MEAN_DISTANCE_KM / Geo.EARTH_KM * R
-const MOON_LAYER := 1 << 2           # only the sun lights the Moon, not the cyan moon light
+## Render layer of the Moon: only the Sun lights it, not the cyan moon light.
+const MOON_LAYER := 1 << 2
+## The Environment: black background (from the `color_background` setting), faint ambient light and a studio-like sky
+## used only for reflections (so the gold balls look metallic).
 var _env: Environment
-var _sky_mesh: MeshInstance3D       # star field sphere (with the sun) centred on the camera
+## The sky sphere (with the Sun's picture) centered on the camera.
+var _sky_mesh: MeshInstance3D
+## The sky sphere's shader material.
 var _sky_mat: ShaderMaterial
-var _stars_node: MeshInstance3D     # the 2000 brightest stars, positioned at the camera
+## The 2000 brightest stars, drawn as small camera-facing quads positioned at the camera ([method _build_stars]).
+var _stars_node: MeshInstance3D
+## The stars' shader material (`shaders/stars.gdshader`); its size follows [member _pixel_angle].
 var _stars_mat: ShaderMaterial
+## Parent of the city markers (in the Earth's frame).
 var _cities_node: Node3D
+## Parent of the earthquake shapes.
 var _quakes_node: Node3D
+## Parent of the hour labels that turn with the Earth (wall-clock and home labels).
 var _hours_earth: Node3D
+## Parent of the hour labels fixed to the Sun (noon-relative and solar labels).
 var _hours_fixed: Node3D
+## Parent of the latitude/longitude grid lines.
 var _grid_node: Node3D
+## The noon meridian: a half great circle facing the Sun (not shown in cubic mode).
 var _noon_line: MeshInstance3D
+## Parent of the World Heritage site markers.
 var _sites_node: Node3D
+## Parent of the outlines of the earthquake regions.
 var _regions_node: Node3D
+## The cubic Earth (six map faces), shown instead of the sphere when [member _cubic] is true.
 var _cube: Node3D
+## True when the cubic Earth is shown instead of the sphere ([method set_cubic]).
 var _cubic := false
+## The candy-striped north-south pole with gold balls at the ends.
 var _poles: Node3D
-var _pole_shafts: Array = []        # [north, south] striped shafts that spin like barber poles
-var _dn_items: Array = []           # nodes whose material follows day/night: {node, lat, lon, day, night}
-var _sat_node: Node3D                # satellites, in the Earth's frame
-var _sat_items: Dictionary = {}     # NORAD id -> {holder, label, km}
-var _arrows: Array = []             # animated earthquake arrows (spin about their axis)
+## The two striped half-poles [north, south]; each spins slowly about its axis like a barber pole.
+var _pole_shafts: Array = []
+## Objects whose material follows day and night: {node, lat, lon, day, night, is_day}; updated once a minute by
+## [method _refresh_day_night].
+var _dn_items: Array = []
+## Parent of the satellite models (in the Earth's frame).
+var _sat_node: Node3D
+## Satellite models by NORAD id: {holder, label, km, name} (see [method SatelliteModel.build]).
+var _sat_items: Dictionary = {}
+## Animated earthquake arrows, {node, dir}; each spins about its axis, one radian a second.
+var _arrows: Array = []
+## Materials already made, by color/kind, so each is built once.
 var _mat_cache: Dictionary = {}
+## Parent of the points-of-interest markers.
 var _pois_node: Node3D
+## File name of the map now on the Earth; used to tell when the texture needs changing ([method _apply_map]).
 var _current_map_file := ""
+## Camera angle round the Earth (radians), in orbit mode.
 var _yaw := 0.0
-var _pan := Vector2.ZERO            # screen-plane offset of the camera (command/option-drag)
+## Screen-plane offset of the camera (Command/Option/Ctrl-drag), so the globe can be moved across the view.
+var _pan := Vector2.ZERO
+## Camera angle above or below the equator (radians), in orbit mode.
 var _pitch := 0.0
+## Camera distance from the Earth's center, in orbit mode ([constant MIN_DISTANCE] to [constant MAX_DISTANCE]).
 var _distance := DEFAULT_DISTANCE
-## Special vantage points chosen from the context menu (never saved): the camera leaves its orbit around the Earth.
+## How the camera is placed. ORBIT: circling the Earth, controlled by dragging (the normal mode). FROM_MOON and
+## FROM_SUN: sitting at the Moon or Sun and facing the Earth, following the Moon. LOOK_AT_MOON: standing near the
+## Earth and pointing at the Moon. FLIGHT: a slow wandering flight just above the surface. The special modes are
+## chosen from the context menu, are never saved, and (except FLIGHT, which ends on a double click) end when the user
+## moves the camera. See [method set_camera_mode].
 enum CamMode { ORBIT, FROM_MOON, FROM_SUN, LOOK_AT_MOON, FLIGHT }
+## Emitted when the camera mode changes, so main.gd can update the context menu's check marks.
+##
+## [param mode]: the new [enum CamMode].
 signal camera_mode_changed(mode: int)
+## The current [enum CamMode].
 var _cam_mode := CamMode.ORBIT
-var _look_from := Vector3.ZERO        # LOOK_AT_MOON: where the camera stands (fixed; it does not follow the moon)
-var _blend := 1.0                     # 0..1 progress of the glide to a new vantage point
+## LOOK_AT_MOON: where the camera stands. Fixed when the mode starts; it does not follow the Moon.
+var _look_from := Vector3.ZERO
+## Progress, 0 to 1, of the one-second glide from the old camera position to the new mode's position.
+var _blend := 1.0
+## The camera's transform when the glide started.
 var _blend_from := Transform3D.IDENTITY
+## The camera's field of view when the glide started.
 var _blend_fov := CAMERA_FOV
+## The Tween driving [member _blend].
 var _blend_tween: Tween
-var _look_fov := 4.0                  # LOOK_AT_MOON: the zoom, as the camera's field of view in degrees
+## LOOK_AT_MOON: the zoom, as the field of view in degrees (a smaller angle is closer). Changed by the wheel and pinch
+## ([method zoom_look]).
+var _look_fov := 4.0
+## Narrowest field of view (closest zoom) when looking at the Moon, in degrees.
 const LOOK_FOV_MIN := 0.2
+## Widest field of view when looking at the Moon, in degrees.
 const LOOK_FOV_MAX := 40.0
 
 # Camera flight: a slow, wandering flight just above the surface, among the hour labels.
+## The wandering-value class (wander.gd), used for the flight's slowly changing speed, course, altitude and view
+## angles.
 const Wander := preload("res://scripts/views/wander.gd")
-const HOUR_RADIUS := 11.5                                       # where the hour labels sit, from the Earth's centre
-const HOUR_ALTITUDE := HOUR_RADIUS - R                          # their height above the surface
-const FLIGHT_MIN_RADIUS := R + HOUR_ALTITUDE * 0.1              # the flight stays between 0.1x and 1.1x the hours' altitude
+## Where the hour labels sit, as a distance from the Earth's center (1.15 times the radius).
+const HOUR_RADIUS := 11.5
+## The hour labels' height above the surface; the flight altitude limits are fractions of this.
+const HOUR_ALTITUDE := HOUR_RADIUS - R
+## Lowest the flight goes, as a distance from the Earth's center: the surface plus 0.1 times the hours' altitude.
+const FLIGHT_MIN_RADIUS := R + HOUR_ALTITUDE * 0.1
+## Highest the flight goes: the surface plus 1.1 times the hours' altitude.
 const FLIGHT_MAX_RADIUS := R + HOUR_ALTITUDE * 1.1
+## The camera's field of view during the flight, in degrees (wide, to see the surface and the horizon).
 const FLIGHT_FOV := 60.0
-const FLIGHT_YAW_LIMIT := 20.0                                  # degrees the view may turn to either side of the course
-const FLIGHT_PITCH_LIMIT := 15.0                                # degrees it may tip up or down
-const FLIGHT_CLEARANCE := 1.2                                   # keep this far from any satellite, quake marker or pole
-const FLIGHT_REACH := 4.0                                       # start steering round something this far ahead
-var _fl_dir := Vector3.BACK                    # unit vector from the Earth's centre to the camera
-var _fl_tangent := Vector3.RIGHT               # the course: along the surface, perpendicular to _fl_dir
-var _fl_forward := Vector3.RIGHT               # where the camera looks (the course turned by the yaw and pitch offsets)
+## How far, in degrees, the view may turn to either side of the course.
+const FLIGHT_YAW_LIMIT := 20.0
+## How far, in degrees, the view may tip up or down from the horizon.
+const FLIGHT_PITCH_LIMIT := 15.0
+## The flight keeps at least half of this distance from any satellite, quake marker or pole.
+const FLIGHT_CLEARANCE := 1.2
+## The flight starts steering round something when it is closer than this.
+const FLIGHT_REACH := 4.0
+## Flight: the unit vector from the Earth's center to the camera.
+var _fl_dir := Vector3.BACK
+## Flight: the course, a unit vector along the surface perpendicular to [member _fl_dir].
+var _fl_tangent := Vector3.RIGHT
+## Flight: where the camera looks (the course turned by the yaw and pitch offsets, and eased).
+var _fl_forward := Vector3.RIGHT
+## Flight: the camera's position.
 var _fl_pos := Vector3.ZERO
+## Flight: positions of things to keep clear of (satellites, quake markers, pole tips); refreshed four times a second
+## by [method _refresh_flight_obstacles].
 var _fl_obstacles: Array[Vector3] = []
-var _fl_avoid := 0.0                           # the eased-in turn away from obstacles, radians a second
+## Flight: the eased-in turn away from obstacles, in radians a second.
+var _fl_avoid := 0.0
+## Flight: seconds since the obstacle list was refreshed.
 var _fl_obstacle_age := 99.0
+## Flight: the random number generator for the wandering values.
 var _fl_rng := RandomNumberGenerator.new()
-var _fl_altitude: RefCounted                   # Wander objects
+## Flight: wandering value for the distance from the Earth's center (between [constant FLIGHT_MIN_RADIUS] and
+## [constant FLIGHT_MAX_RADIUS]).
+var _fl_altitude: RefCounted
+## Flight: wandering value for the speed along the surface, in units a second.
 var _fl_speed: RefCounted
+## Flight: wandering value for the rate the course turns, in radians a second.
 var _fl_turn: RefCounted
+## Flight: wandering value for how far the view is turned to the side, in degrees.
 var _fl_yaw: RefCounted
+## Flight: wandering value for how far the view is tipped up or down, in degrees.
 var _fl_pitch: RefCounted
-var _hour_alpha := 1.0              # current opacity of the hour labels (depends on zoom)
+## The hour labels' current opacity; depends on the zoom (see [method _update_hour_alpha]) and is always 1 during the
+## flight.
+var _hour_alpha := 1.0
+## True while the left mouse button (or one finger) is down and dragging the globe.
 var _dragging := false
+## The welcome text ([IntroText]) while it exists.
 var _intro: IntroText
+## Render layer of the invisible sphere that casts the Earth's shadow, so the "3D shadows" option can keep it while
+## switching other shadows off.
 const EARTH_SHADOW_LAYER := 1 << 19
-const NIGHT_LAYER := 1 << 1   # night-side objects: not lit by the sun
+## Render layer for objects on the night side: the Sun's light ignores it, so the Sun cannot light their sides near
+## the edge of the lit half.
+const NIGHT_LAYER := 1 << 1
+## Where the last mouse press began, to tell a tap from a drag ([constant TAP_SLOP]).
 var _tap_start := Vector2.ZERO
-const TAP_SLOP := 6.0   # pixels a tap may move and still count as a tap
+## How far in pixels a press may move and still count as a tap.
+const TAP_SLOP := 6.0
+## The minute (Unix time / 60) of the last once-a-minute update; when it changes the day/night materials and
+## wall-clock hour labels are refreshed.
 var _last_hour_stamp := -1
-var _hour_items: Array = []           # the 24 hour labels, each {node, parent}
-var _hours_stale := 0                 # how many wall-clock labels still need renewing after the minute changed
-var _sun_point: MeshInstance3D       # the ball under the sun (SolarLunarMarker)
-var _moon_point: MeshInstance3D      # the ball under the moon
-var _quake_nodes: Dictionary = {}   # quake id -> {group: Node3D holding all its nodes, indicator: Node3D or null}
-var _indicator_parent: Node3D       # where _add_quake_indicator puts what it builds
+## The 24 hour labels, each {node, parent}.
+var _hour_items: Array = []
+## How many wall-clock hour labels still need renewing after the minute changed; see [method _renew_next_hour].
+var _hours_stale := 0
+## The ball on the Earth under the Sun (see SolarLunarMarker).
+var _sun_point: MeshInstance3D
+## The ball on the Earth under the Moon.
+var _moon_point: MeshInstance3D
+## The earthquake shapes by quake id: {group: Node3D holding all of that quake's nodes, indicator: Node3D or null}.
+## Used by [method _sync_quakes] so only changed quakes are rebuilt.
+var _quake_nodes: Dictionary = {}
+## Where [method _add_quake_indicator] puts the indicator it builds (set by the caller for the quake being built).
+var _indicator_parent: Node3D
+## Seconds since the last once-a-second update ([method _update_time]).
 var _tick := 0.0
+## Attract mode: the Earth's current turn, in radians.
 var _attract_angle := 0.0
+## The turn that puts the sub-solar longitude facing the Sun now; the Earth eases toward it.
 var _earth_angle := 0.0
+## The last mouse position over the globe, in pixels.
 var _mouse_pos := Vector2.ZERO
+## Whether the mouse is inside the globe view (set by main.gd).
 var _mouse_inside := false
+## The view's last known size; the camera is re-fitted when it changes.
 var _vp_size := Vector2(1280, 800)
 
+## Builds the scene ([method _build_scene]), connects settings, map textures, quake updates and user-data changes,
+## then applies the map, builds everything and sets the time.
 func _ready() -> void:
 	_build_scene()
 	Settings.changed.connect(_on_setting_changed)
@@ -138,6 +280,10 @@ func _ready() -> void:
 
 # MARK: - Scene construction
 
+## Builds the 3D world: the environment, the Earth system (tilted by the Sun's declination, with the Earth sphere,
+## shadow caster, sea sphere and the parent nodes for cities, quakes, hours, grid, sites, POIs, satellites and
+## regions), the noon line, poles, cubic Earth, the Sun and moon lights, the Moon, the camera and the sky. The welcome
+## text is started later by [method start_intro].
 func _build_scene() -> void:
 	_env = Environment.new()
 	_env.background_mode = Environment.BG_COLOR
@@ -255,8 +401,9 @@ func _build_scene() -> void:
 	_camera.current = true
 	_build_sky()
 
-## The Moon: a sphere of its true size (0.27 Earth diameters) at its true distance (about 60 Earth radii), textured with the
-## lunar map, its near side turned to the Earth. The sun lights it, so its phase is right without any extra work.
+## Builds the Moon: a sphere of its true size (0.27 Earth diameters) textured with the lunar map. It sits at its true
+## distance (about 60 Earth radii) by [method _place_moon]; the Sun lights it, so its phase is right without extra
+## work.
 func _build_moon() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = load("res://Assets/Moon/LROMoon.png")
@@ -272,7 +419,10 @@ func _build_moon() -> void:
 	_moon_body.visible = Settings.get_bool("show_moon")
 	add_child(_moon_body)
 
-## Puts the Moon where it is in the sky of the Earth system (the same frame the stars use) and turns it to face the Earth.
+## Puts the Moon where it is in the sky (the same frame the stars use) and turns its near side to the Earth with its
+## north up. Then re-fits the camera, since the far plane depends on the Moon's distance.
+##
+## [param now]: Unix time in seconds (UTC).
 func _place_moon(now: float) -> void:
 	if _moon_body == null:
 		return
@@ -285,13 +435,24 @@ func _place_moon(now: float) -> void:
 	_moon_body.transform = Transform3D(Basis(up.cross(toward_earth), up, toward_earth), dir * _moon_distance)
 	_apply_camera()
 
+## Makes an empty named child node.
+##
+## [param parent]: the node to add to.
+## [param node_name]: the new node's name.
+## Returns: the new Node3D.
 func _child(parent: Node, node_name: String) -> Node3D:
 	var n := Node3D.new()
 	n.name = node_name
 	parent.add_child(n)
 	return n
 
-## UV sphere with longitude 0 facing +Z and the texture's left edge at -180°.
+## Builds a UV sphere with longitude 0 facing +Z and the texture's left edge at -180 degrees, so equirectangular maps
+## fit.
+##
+## [param radius]: sphere radius.
+## [param segments]: divisions around.
+## [param rings]: divisions from pole to pole.
+## Returns: the ArrayMesh.
 func _make_sphere_mesh(radius: float, segments: int, rings: int) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
@@ -320,8 +481,9 @@ func _make_sphere_mesh(radius: float, segments: int, rings: int) -> ArrayMesh:
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
-## The candy-striped pole with a gold ball at each end (Flatland's PolarShape). Each half-pole spins
-## slowly about its axis so the diagonal stripes climb like a barber pole.
+## Builds the candy-striped pole through the Earth with a gold ball at each end (Flatland's PolarShape). It is two
+## half-poles (stored in [member _pole_shafts]) that spin slowly about their axis, so the diagonal stripes climb like
+## a barber pole. Added under [member _fixed].
 func _build_poles() -> void:
 	var img := Image.create(64, 64, false, Image.FORMAT_RGB8)
 	for y in range(64):
@@ -364,6 +526,12 @@ func _build_poles() -> void:
 
 # MARK: - Settings and map handling
 
+## Reacts to a changed setting by updating only what it affects: the map, cities, grid, hour labels, Sun/Moon balls,
+## the Moon, moonlight, stars, satellites, shadows, earthquakes, heritage sites, points of interest, regions, the
+## cubic/sphere view, colors, the debugger clock, or the world lock (which resets the view).
+##
+## [param key]: the setting's key.
+## [param _value]: its new value (read again from Settings by each handler).
 func _on_setting_changed(key: String, _value: Variant) -> void:
 	match key:
 		"map_type":
@@ -419,6 +587,9 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 			if Settings.get_bool("world_locked"):
 				reset_view()
 
+## Puts the map chosen by the `map_type` setting on the Earth: remembers its file names, shows or hides the sea
+## sphere, and asks [MapCatalog] for the pictures (if they are not loaded yet, [method _on_texture_ready] applies them
+## later).
 func _apply_map() -> void:
 	var m := MapCatalog.map_for(Settings.get_string("map_type"))
 	if m.is_empty():
@@ -434,6 +605,11 @@ func _apply_map() -> void:
 	if tex != null:
 		_set_earth_texture(tex)
 
+## A map picture finished loading: applies it if it is the current map or sea, and refreshes the stars when the Tycho
+## sky map arrives (it is the star field's background).
+##
+## [param file_name]: the file that arrived.
+## [param tex]: its texture.
 func _on_texture_ready(file_name: String, tex: Texture2D) -> void:
 	if file_name == _current_map_file:
 		_set_earth_texture(tex)
@@ -442,22 +618,30 @@ func _on_texture_ready(file_name: String, tex: Texture2D) -> void:
 	elif file_name == "TychoSky.png":
 		_apply_stars()
 
+## Puts a texture on the Earth's material and resets its base color to white so the picture shows true.
+##
+## [param tex]: the map texture.
 func _set_earth_texture(tex: Texture2D) -> void:
 	_set_tex(_earth_mat, tex)
 	_earth_mat.set_shader_parameter("albedo_color", Color.WHITE)
 
+## Gives a shader material a map texture and switches its texturing on.
+##
+## [param mat]: the Earth or sea material.
+## [param tex]: the texture.
 func _set_tex(mat: ShaderMaterial, tex: Texture2D) -> void:
 	mat.set_shader_parameter("albedo_tex", tex)
 	mat.set_shader_parameter("use_tex", true)
 
-## Turn the 3D shadows cast by labels, cities and the like on or off. The invisible sphere that
-## shades the night side is on its own layer and always keeps casting, so night-side objects stay dark.
+## Turns the 3D shadows cast by labels, cities and the like on or off, from the `show_shadows_3d` setting and the
+## graphics quality ([method PowerManager.shadows_allowed]). The invisible sphere that shades the night side is on its
+## own layer and always keeps casting, so night-side objects stay dark.
 func _apply_shadows() -> void:
 	var on := Settings.get_bool("show_shadows_3d") and PowerManager.shadows_allowed()
 	_sun.shadow_caster_mask = 0xFFFFF if on else EARTH_SHADOW_LAYER
 
-## The star field sphere. It is centred on (and moves with) the camera, sits just beyond everything
-## else in the scene, and shows the sky a viewer at the camera's position would see, plus the sun.
+## Builds the sky: a large sphere (with the Sun's picture) centered on, and moving with, the camera, sitting just
+## beyond everything else, plus the stars ([method _build_stars]).
 func _build_sky() -> void:
 	_sky_mat = ShaderMaterial.new()
 	_sky_mat.shader = load("res://shaders/sky.gdshader")
@@ -476,17 +660,30 @@ func _build_sky() -> void:
 	_camera.add_child(_sky_mesh)
 	_build_stars()
 
-## The stars: the 2000 brightest (HYG catalogue, data/bright_stars.json) plotted by right ascension
-## and declination as round points on a sphere centred on the camera. Stars are at infinity, so a
-## viewer at the camera's position sees them by direction only.
+## The star under the mouse changed (macOS only; shown with a tooltip that main.gd draws beside the pointer). The
+## stars are the 2000 brightest (HYG catalogue, data/bright_stars.json) plotted by right ascension and declination as
+## points on a sphere centered on the camera; being at infinity, they are seen by direction only.
+##
+## [param text]: the star's description, or "" when none.
+## [param position]: the mouse position in pixels.
 signal star_tooltip_changed(text: String, position: Vector2)
-const STAR_HOVER_SLOP := 10.0   # pixels
+## How close in pixels the mouse must be to a star to select it for the tooltip.
+const STAR_HOVER_SLOP := 10.0
+## Each star's direction as a unit vector in the star frame (before [member _stars_basis]).
 var _star_dirs: Array[Vector3] = []
+## Each star's catalogue row: [RA, Dec, magnitude, B-V color index, name, spectral type].
 var _star_info: Array = []
+## The tooltip text last sent, so it is only sent when it changes.
 var _last_star_tip := ""
+## Rotation from the star frame to the scene: turns the sky so the Sun's right ascension faces +Z, then tilts it by
+## the declination. Set by [method _update_time]; also used for the Moon.
 var _stars_basis := Basis.IDENTITY
 
-## Tooltip text for the star under `mouse` (within a few pixels), or "" if there is none.
+## Finds the star under the mouse (within [constant STAR_HOVER_SLOP] pixels, in front of the camera, and not hidden by
+## the globe, poles, Sun or welcome text) and describes it.
+##
+## [param mouse]: the mouse position in pixels.
+## Returns: the star's name (if it has one), magnitude and type, as lines of text; "" if no star is there.
 func star_tooltip_at(mouse: Vector2) -> String:
 	if _stars_node == null or not _stars_node.visible or _star_dirs.is_empty():
 		return ""
@@ -514,7 +711,12 @@ func star_tooltip_at(mouse: Vector2) -> String:
 	lines.append("Type: %s" % (str(info[5]) if str(info[5]) != "" else "unknown"))
 	return "\n".join(lines)
 
-## True if something in front of the sky (globe, poles, sun, welcome text) hides the star in `dir`.
+## Whether something in front of the sky hides a star: the globe (with a small margin), the poles, the Sun's disk, or
+## the welcome text.
+##
+## [param cam_pos]: the camera position.
+## [param dir]: the unit direction to the star.
+## Returns: true if hidden.
 func _star_obscured(cam_pos: Vector3, dir: Vector3) -> bool:
 	# The globe (with a little margin for the sea, grid and markers).
 	if _ray_hits_sphere(cam_pos, dir, Vector3.ZERO, Geo.GLOBE_RADIUS + 0.3):
@@ -534,13 +736,26 @@ func _star_obscured(cam_pos: Vector3, dir: Vector3) -> bool:
 		return true
 	return false
 
+## Whether a ray passes through a sphere, in front of its origin.
+##
+## [param origin]: ray start.
+## [param dir]: ray direction (a unit vector).
+## [param center]: sphere center.
+## [param radius]: sphere radius.
+## Returns: true if it hits.
 static func _ray_hits_sphere(origin: Vector3, dir: Vector3, center: Vector3, radius: float) -> bool:
 	var oc := origin - center
 	var b := oc.dot(dir)
 	var disc := b * b - (oc.length_squared() - radius * radius)
 	return disc > 0.0 and -b + sqrt(disc) > 0.0
 
-## Shortest distance between the ray (origin + t * dir, t >= 0) and the segment a-b.
+## The shortest distance between a ray (start plus a non-negative multiple of the direction) and a line segment.
+##
+## [param origin]: ray start.
+## [param dir]: ray direction.
+## [param a]: one end of the segment.
+## [param b]: the other end.
+## Returns: the distance; used to test whether a ray passes near the pole shaft.
 static func _ray_segment_distance(origin: Vector3, dir: Vector3, a: Vector3, b: Vector3) -> float:
 	var seg := b - a
 	var w := origin - a
@@ -555,6 +770,10 @@ static func _ray_segment_distance(origin: Vector3, dir: Vector3, a: Vector3, b: 
 		u = clampf((w.dot(seg) + t * ds) / ss, 0.0, 1.0)
 	return (origin + dir * t).distance_to(a + seg * u)
 
+## Updates the star tooltip as the mouse moves (macOS only): finds the star with [method star_tooltip_at] and emits
+## [signal star_tooltip_changed] if it changed.
+##
+## [param mouse]: the mouse position in pixels.
 func _update_star_tooltip(mouse: Vector2) -> void:
 	if OS.get_name() != "macOS":
 		return
@@ -563,16 +782,23 @@ func _update_star_tooltip(mouse: Vector2) -> void:
 		_last_star_tip = tip
 		star_tooltip_changed.emit(tip, mouse)
 
+## Radius of the star sphere around the camera: just inside the camera's far plane. Set by [method _apply_camera].
 var _sky_radius := 200.0
+## The angle in radians one screen pixel covers at the current field of view; the stars' shader uses it to draw stars
+## the same size in pixels at any zoom. Set by [method _apply_camera].
 var _pixel_angle := 0.0002
 
-## Centre the star sphere on the camera and orient it for the current time.
+## Centers the star sphere on the camera, orients it with [member _stars_basis] and gives the shader the current pixel
+## size.
 func _place_stars() -> void:
 	if _stars_node == null:
 		return
 	_stars_node.global_transform = Transform3D(_stars_basis.scaled(Vector3.ONE * _sky_radius), _camera.global_position)
 	_stars_mat.set_shader_parameter("pixel_angle", _pixel_angle)
 
+## Builds the star field from data/bright_stars.json: a small camera-facing quad per star, colored by its color index
+## ([method _star_color]). Brightness follows the star's magnitude (every magnitude is 2.5 times fainter than the one
+## before, shown a little flatter, with the faintest kept visible), and brighter stars are drawn a little bigger.
 func _build_stars() -> void:
 	var rows: Variant = JSON.parse_string(FileAccess.get_file_as_string("res://data/bright_stars.json"))
 	if not (rows is Array):
@@ -623,7 +849,10 @@ func _build_stars() -> void:
 	add_child(_stars_node)
 	_apply_stars()
 
-## Approximate star colour from its B-V colour index: blue-white to yellow to orange-red.
+## Approximate color of a star from its B-V color index, from blue-white through white and yellow to orange-red.
+##
+## [param bv]: the B-V color index (about -0.3 hot to 2 cool).
+## Returns: the Color.
 func _star_color(bv: float) -> Color:
 	var blue := Color(0.5, 0.65, 1.0)
 	var white := Color(0.95, 0.95, 1.0)
@@ -638,6 +867,8 @@ func _star_color(bv: float) -> Color:
 		return yellow.lerp(orange, (bv - 0.6) / 0.6)
 	return orange.lerp(red, clampf((bv - 1.2) / 0.6, 0.0, 1.0))
 
+## Shows or hides the sky sphere (it carries the Sun's picture) and the star points, and tells the sky shader whether
+## to draw the Sun, from the `show_sun` and `show_stars` settings.
 func _apply_stars() -> void:
 	if _sky_mat == null:
 		return
@@ -649,6 +880,8 @@ func _apply_stars() -> void:
 
 # MARK: - Content (cities, grid, hours, quakes)
 
+## Builds all the content from scratch: view type (sphere or cube), grid, cities, hour labels, earthquakes, heritage
+## sites, points of interest, regions, moonlight and the stars. Called once at start-up.
 func _rebuild_all() -> void:
 	set_cubic(Settings.get_string("view_type") == Settings.VIEW_CUBIC)
 	_rebuild_grid()
@@ -661,11 +894,19 @@ func _rebuild_all() -> void:
 	_moon.visible = Settings.get_bool("show_moon_light")
 	_apply_stars()
 
+## Frees all the children of a node (queued).
+##
+## [param node]: the node to empty.
 func _clear(node: Node) -> void:
 	for c in node.get_children():
 		c.queue_free()
 
-## Material pair (day, night) for a color. At night the object glows in its own color, as in Flatland.
+## A pair of materials for a color: one for day and one for night. At night the object glows in its own color, as in
+## Flatland. Cached.
+##
+## [param color]: the object's color.
+## [param glow]: the glow color used at night.
+## Returns: [day material, night material].
 func _mat_pair(color: Color, glow: Color) -> Array:
 	var key := "%s|%s" % [color.to_html(), glow.to_html()]
 	if _mat_cache.has(key):
@@ -681,6 +922,14 @@ func _mat_pair(color: Color, glow: Color) -> Array:
 	_mat_cache[key] = [day, night]
 	return _mat_cache[key]
 
+## Gives a marker the day or night material for its place and remembers it, so [method _refresh_day_night] can switch
+## it as the terminator moves. Night objects also go to [constant NIGHT_LAYER].
+##
+## [param node]: the marker.
+## [param lat]: its latitude.
+## [param lon]: its longitude.
+## [param color]: the day color.
+## [param glow]: the night glow color.
 func _register_dn(node: MeshInstance3D, lat: float, lon: float, color: Color, glow: Color) -> void:
 	var pair := _mat_pair(color, glow)
 	_dn_items.append({"node": node, "lat": lat, "lon": lon, "day": pair[0], "night": pair[1]})
@@ -688,6 +937,9 @@ func _register_dn(node: MeshInstance3D, lat: float, lon: float, color: Color, gl
 	node.material_override = pair[0] if day_now else pair[1]
 	_set_night_layer(node, not day_now)
 
+## Called once a minute: switches the material and render layer of each registered object ([member _dn_items]) that
+## has crossed the terminator. Only changed objects are touched, because changing every object each minute made the
+## whole scene re-prepare and caused a visible hitch.
 func _refresh_day_night() -> void:
 	var now := Solar.now()
 	for it in _dn_items:
@@ -701,12 +953,27 @@ func _refresh_day_night() -> void:
 			it["node"].material_override = it["day"] if day_now else it["night"]
 			_set_night_layer(it["node"], not day_now)
 
-## Objects on the night side are put on their own render layer, which the sun light ignores, so the
-## sun cannot light their sides near the limb. (The moon light and their own glow still apply.)
+## Puts an object on the night render layer, which the Sun's light ignores, so the Sun cannot light its sides near the
+## edge of the lit half. (The moon light and the object's own glow still apply.)
+##
+## [param node]: the object.
+## [param night]: true to move it to [constant NIGHT_LAYER], false for the normal layer.
 func _set_night_layer(node: MeshInstance3D, night: bool) -> void:
 	node.layers = NIGHT_LAYER if night else 1
 
-## Extruded text lying on the surface, readable from outside, centered on its position.
+## Builds extruded text lying on the surface, readable from outside, centered on its position and bent to follow the
+## globe ([method Shapes.bend_text]).
+##
+## [param text]: the words.
+## [param lat]: latitude of the anchor.
+## [param lon]: longitude of the anchor.
+## [param radius]: distance from the Earth's center.
+## [param em]: text size in scene units.
+## [param depth]: extrusion depth.
+## [param top_anchor]: true to hang the text from its anchor (like Flatland's top-center pivot) instead of centering
+##   it.
+## [param font]: a font, or null for the label font.
+## Returns: the MeshInstance3D.
 func _flat_text(text: String, lat: float, lon: float, radius: float, em: float, depth: float, top_anchor: bool = false, font: Font = null) -> MeshInstance3D:
 	var tm := TextMesh.new()
 	tm.text = text
@@ -724,18 +991,30 @@ func _flat_text(text: String, lat: float, lon: float, radius: float, em: float, 
 	mi.transform = Transform3D(basis, pos)
 	return mi
 
-## Node whose local +Y points away from the globe at the given place (so shapes can be built "upright").
+## Makes a node standing on the surface with its local +Y pointing away from the globe, so shapes can be built
+## upright.
+##
+## [param lat]: latitude.
+## [param lon]: longitude.
+## [param radius]: distance from the Earth's center.
+## Returns: the Node3D (not yet added to a parent).
 func _up_node(lat: float, lon: float, radius: float) -> Node3D:
 	var b := Geo.surface_basis(lat, lon)
 	var n := Node3D.new()
 	n.transform = Transform3D(Basis(b.x, b.z, b.x.cross(b.z)), Geo.to_vec3(lat, lon, radius))
 	return n
 
+## A city's size for scaling its marker: the larger of its own and its metropolitan-area population.
+##
+## [param c]: a city Dictionary.
+## Returns: the population.
 func _city_population(c: Dictionary) -> int:
 	return maxi(int(c.get("Population", 0)), int(c.get("MetropolitanPopulation", 0)))
 
-## Cities in the shape chosen in Preferences (Flatland's CityDisplayTypes). Every shape glows in its own
-## color at night; names lie flat on the map, dark blue by day and teal by night.
+## Rebuilds the city markers in the shape chosen in Preferences (Flatland's CityDisplayTypes): flush or relative
+## spheres, floating spheres or boxes, boxes, cylinders, pyramids, sticks or names. Every shape glows in its own color
+## at night; names lie flat on the map, dark blue by day and teal by night. Sizes follow the population relative to
+## the largest city. Called when any city setting changes.
 func _rebuild_cities() -> void:
 	_clear(_cities_node)
 	_dn_items = _dn_items.filter(func(i): return not (is_instance_valid(i["node"]) and i["node"].get_parent() == _cities_node))
@@ -788,6 +1067,11 @@ func _rebuild_cities() -> void:
 			_:
 				_city_flush_sphere(c, col, 0.15)
 
+## Adds a small sphere lying on the surface for a city.
+##
+## [param c]: the city Dictionary.
+## [param col]: its color.
+## [param size]: the sphere's radius.
 func _city_flush_sphere(c: Dictionary, col: Color, size: float) -> void:
 	var sphere := SphereMesh.new()
 	sphere.radius = size
@@ -800,7 +1084,14 @@ func _city_flush_sphere(c: Dictionary, col: Color, size: float) -> void:
 	_cities_node.add_child(mi)
 	_register_dn(mi, c["Latitude"], c["Longitude"], col, col)
 
-## Sphere or box on a stem whose color is the complement of the city color (Flatland's floating cities).
+## Adds a sphere or box on a stem (colored with the complement of the city color) floating above the surface
+## (Flatland's floating cities).
+##
+## [param c]: the city Dictionary.
+## [param col]: its color.
+## [param rel]: its population relative to the largest city (0 to 1), which sets the size.
+## [param is_sphere]: true for a sphere, false for a box.
+## [param mult]: the overall size factor from the `city_scale` setting.
 func _city_floating(c: Dictionary, col: Color, rel: float, is_sphere: bool, mult: float) -> void:
 	var lat: float = c["Latitude"]
 	var lon: float = c["Longitude"]
@@ -833,7 +1124,13 @@ func _city_floating(c: Dictionary, col: Color, rel: float, is_sphere: bool, mult
 		_register_outline(body, lat, lon, col)
 	body.position = Vector3(0, stem_len - size, 0)
 
-## Tall boxes or cylinders whose height follows the population (Flatland's "Boxes" and "Cylinders").
+## Adds a tall box or cylinder whose height follows the population (Flatland's "Boxes" and "Cylinders").
+##
+## [param c]: the city Dictionary.
+## [param col]: its color.
+## [param rel]: its population relative to the largest city.
+## [param is_box]: true for a box (with the outlined texture), false for a cylinder.
+## [param mult]: the overall size factor.
 func _city_block(c: Dictionary, col: Color, rel: float, is_box: bool, mult: float) -> void:
 	var lat: float = c["Latitude"]
 	var lon: float = c["Longitude"]
@@ -858,6 +1155,12 @@ func _city_block(c: Dictionary, col: Color, rel: float, is_box: bool, mult: floa
 		holder.add_child(mi)
 		_register_dn(mi, lat, lon, col, col)
 
+## Adds a pyramid standing on the surface, its height following the population.
+##
+## [param c]: the city Dictionary.
+## [param col]: its color.
+## [param rel]: its population relative to the largest city.
+## [param mult]: the overall size factor.
 func _city_pyramid(c: Dictionary, col: Color, rel: float, mult: float) -> void:
 	var lat: float = c["Latitude"]
 	var lon: float = c["Longitude"]
@@ -871,6 +1174,12 @@ func _city_pyramid(c: Dictionary, col: Color, rel: float, mult: float) -> void:
 	holder.add_child(mi)
 	_register_dn(mi, lat, lon, col, col)
 
+## Adds a thin stick standing on the surface (the "Sticks" shape, and the marker that goes with the "Names" shape).
+##
+## [param c]: the city Dictionary.
+## [param col]: the city color (the stick uses its complement).
+## [param height]: the stick's length.
+## [param mult]: the overall size factor.
 func _city_stick(c: Dictionary, col: Color, height: float, mult: float) -> void:
 	var holder := _up_node(c["Latitude"], c["Longitude"], R + 0.1)
 	holder.scale = Vector3.ONE * mult
@@ -884,13 +1193,21 @@ func _city_stick(c: Dictionary, col: Color, height: float, mult: float) -> void:
 	mi.material_override = Shapes.plain(Shapes.complement(col))
 	holder.add_child(mi)
 
-## Textured (outlined block) material that also glows at night.
+## Like [method _register_dn] but for the textured outlined-block material ([method Shapes.outline_material]), which
+## also glows at night.
+##
+## [param node]: the block.
+## [param lat]: its latitude.
+## [param lon]: its longitude.
+## [param col]: its color.
 func _register_outline(node: MeshInstance3D, lat: float, lon: float, col: Color) -> void:
 	_dn_items.append({"node": node, "lat": lat, "lon": lon, "day": Shapes.outline_material(col, false), "night": Shapes.outline_material(col, true)})
 	var is_night := not Solar.is_daylight(lat, lon, Solar.now())
 	node.material_override = Shapes.outline_material(col, is_night)
 	_set_night_layer(node, is_night)
 
+## Rebuilds the World Heritage site markers as one MultiMesh of tiny spheres (cheap for many points). Nothing is drawn
+## when `show_heritage_sites` is off.
 func _rebuild_sites() -> void:
 	_clear(_sites_node)
 	if not Settings.get_bool("show_heritage_sites"):
@@ -916,7 +1233,8 @@ func _rebuild_sites() -> void:
 	mmi.material_override = mat
 	_sites_node.add_child(mmi)
 
-## Locations of interest are small cones pointing into the surface (Flatland's PlotLocationAsCone).
+## Rebuilds the points of interest, the built-in ones and the user's, as small cones pointing into the surface
+## (Flatland's PlotLocationAsCone), glowing at night. Nothing is drawn when `show_user_pois` is off.
 func _rebuild_pois() -> void:
 	_clear(_pois_node)
 	_dn_items = _dn_items.filter(func(i): return not (is_instance_valid(i["node"]) and i["node"].get_parent() == _pois_node))
@@ -935,6 +1253,8 @@ func _rebuild_pois() -> void:
 		var col := Color(str(p.get("Color", "#ee44cc")))
 		_register_dn(mi, p["Latitude"], p["Longitude"], col, col)
 
+## Rebuilds the outlines of the enabled earthquake regions as lines on the globe (a rectangle from the two corners,
+## crossing the antimeridian if needed), if `show_regions` is on.
 func _rebuild_regions() -> void:
 	_clear(_regions_node)
 	if not Settings.get_bool("show_regions"):
@@ -960,8 +1280,11 @@ func _rebuild_regions() -> void:
 			pts.append(Geo.to_vec3(lat2 + (lat1 - lat2) * i / 32.0, lon1, rr))
 		_regions_node.add_child(_line_mesh([pts], Color(str(r.get("color", "#ffcc00")))))
 
-## The cubic world: Flatland's silly cube textured with six map faces. SceneKit's box material
-## order (front, right, back, left, top, bottom) gets nx, pz, px, nz, py-90, ny90.
+## Builds the cubic world (Flatland's "silly cube"): six square faces, each textured with its own picture
+## (`Assets/Cubic/*.png`) by the cube shader. The faces sit where the globe's longitudes put them: +Z is longitude 0
+## (Africa), +X is 90 E (Asia), -Z is 180 (Pacific) and -X is 90 W (the Americas); the pole faces are turned to match.
+## SceneKit's box material order (front, right, back, left, top, bottom) gives the names nz, nx, pz, px, py-90, ny90.
+## Hidden until [method set_cubic] shows it.
 func _build_cube() -> void:
 	_cube = Node3D.new()
 	_cube.name = "Cube"
@@ -993,7 +1316,12 @@ func _build_cube() -> void:
 		quad.basis = f[2]
 		_cube.add_child(quad)
 
-## Puts the balls under the sun and the moon (on the cube, where the line from the centre to the point meets its surface).
+## Puts the balls under the Sun and Moon in place, creating them on first use, and shows each according to its
+## setting. On the sphere a ball floats just above the surface; on the cube it sits on the cube's surface, where the
+## line from the center to the point meets it.
+##
+## [param now]: Unix time in seconds (UTC).
+## Called from [method _update_time], [method set_cubic] and when a setting changes.
 func _place_solar_lunar_points(now: float) -> void:
 	if _sun_point == null:
 		var r := Geo.GLOBE_RADIUS * SolarLunarMarker.GLOBE_FRACTION
@@ -1015,6 +1343,10 @@ func _place_solar_lunar_points(now: float) -> void:
 		else:
 			node.position = dir * Geo.GLOBE_RADIUS * 1.05
 
+## Switches between the sphere and the cubic world: shows the cube (or the sphere, sea, cities, quakes, grid, sites,
+## points of interest and regions), hides the noon line on the cube, and re-places the Sun/Moon balls.
+##
+## [param on]: true for the cube, false for the sphere.
 func set_cubic(on: bool) -> void:
 	_cubic = on
 	if _sun_point != null:
@@ -1026,7 +1358,14 @@ func set_cubic(on: bool) -> void:
 	if not on:
 		_sea_mesh.visible = _sea_file != ""
 
-## Grid lines drawn as flat ribbons lying on the globe, so they have a real width (GPU lines are 1 px).
+## Builds grid lines as flat ribbons lying on the globe, so they have a real width (GPU lines are one pixel). They are
+## unshaded, two-sided and cast no shadow.
+##
+## [param points_list]: an Array of polylines, each an Array of Vector3 points.
+## [param color]: the line color.
+## [param dashed]: true to draw every other group of three segments.
+## [param width]: the ribbon width in scene units.
+## Returns: the MeshInstance3D.
 func _line_mesh(points_list: Array, color: Color, dashed: bool = false, width: float = 0.045) -> MeshInstance3D:
 	var verts := PackedVector3Array()
 	var idx := PackedInt32Array()
@@ -1057,18 +1396,33 @@ func _line_mesh(points_list: Array, color: Color, dashed: bool = false, width: f
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF   # grid lines never cast shadows
 	return mi
 
+## Points of a circle of latitude, for the grid.
+##
+## [param lat]: latitude in degrees.
+## [param radius]: distance from the Earth's center.
+## [param steps]: number of segments (default 180).
+## Returns: an Array of steps + 1 Vector3 points.
 func _latitude_circle(lat: float, radius: float, steps: int = 180) -> Array:
 	var pts: Array = []
 	for i in range(steps + 1):
 		pts.append(Geo.to_vec3(lat, -180.0 + 360.0 * i / steps, radius))
 	return pts
 
+## Points of a meridian from pole to pole, for the grid.
+##
+## [param lon]: longitude in degrees.
+## [param radius]: distance from the Earth's center.
+## [param steps]: number of segments (default 90).
+## Returns: an Array of steps + 1 Vector3 points.
 func _meridian(lon: float, radius: float, steps: int = 90) -> Array:
 	var pts: Array = []
 	for i in range(steps + 1):
 		pts.append(Geo.to_vec3(-90.0 + 180.0 * i / steps, lon, radius))
 	return pts
 
+## Rebuilds the grid: the major latitude circles (equator, tropics, polar circles) and the 15 degree meridians, each
+## as the settings allow, in the `color_grid` color, just above the surface (enough to avoid z-fighting). Nothing is
+## drawn when `show_grid` is off.
 func _rebuild_grid() -> void:
 	_clear(_grid_node)
 	_noon_line.mesh = null
@@ -1092,6 +1446,14 @@ func _rebuild_grid() -> void:
 			minor.append(_meridian(15.0 * k, lr, 180))
 		_grid_node.add_child(_line_mesh(minor, Settings.get_color("color_grid"), false, 0.045))
 
+## Builds one hour label: extruded heavy-font text bent round the globe, in a glossy material (a polished body under a
+## clear coat). The Sun, fixed behind the camera, must be what lights the label, so the material stays only slightly
+## metallic. Its opacity follows [member _hour_alpha].
+##
+## [param text]: the label text.
+## [param size]: size factor (1.0 normal).
+## [param radius]: the sphere the text is bent round (default 11.5, [constant HOUR_RADIUS]).
+## Returns: the MeshInstance3D.
 func _hour_mesh(text: String, size: float, radius: float = 11.5) -> MeshInstance3D:
 	var tm := TextMesh.new()
 	tm.text = text
@@ -1119,19 +1481,28 @@ func _hour_mesh(text: String, size: float, radius: float = 11.5) -> MeshInstance
 	mi.material_override = mat
 	return mi
 
-## Opacity for the hour labels at the current zoom: 1.0 when far, HOUR_MIN_ALPHA when close.
+## The opacity of the hour labels at a camera distance: fully opaque far away, fading to [constant HOUR_MIN_ALPHA] as
+## the camera moves in, so they do not block the surface.
+##
+## [param distance]: camera distance from the Earth's center.
+## Returns: 0 to 1.
 func _hour_alpha_for_distance(distance: float) -> float:
 	var t := smoothstep(HOUR_FADE_END_DISTANCE, HOUR_FADE_START_DISTANCE, distance)
 	return lerpf(HOUR_MIN_ALPHA, 1.0, t)
 
-## Alpha blending is only switched on while a label is actually see-through, so fully opaque
-## labels keep the cheaper opaque rendering and sorting.
+## Sets a label material's opacity. Alpha blending is only switched on while the label is actually see-through, so
+## fully opaque labels keep the cheaper opaque rendering and sorting.
+##
+## [param mat]: the label's material.
+## [param alpha]: 0 to 1.
 func _apply_alpha_to_hour_material(mat: StandardMaterial3D, alpha: float) -> void:
 	var c := mat.albedo_color
 	c.a = alpha
 	mat.albedo_color = c
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA if alpha < 0.999 else BaseMaterial3D.TRANSPARENCY_DISABLED
 
+## Updates all the hour labels' opacity for the current camera: 1 (fully opaque) in flight, otherwise from the
+## camera's distance ([method _hour_alpha_for_distance]). Does nothing if it has not changed.
 func _update_hour_alpha() -> void:
 	var a := 1.0 if _cam_mode == CamMode.FLIGHT else _hour_alpha_for_distance(_distance if _cam_mode == CamMode.ORBIT else _camera.global_position.length())
 	if is_equal_approx(a, _hour_alpha) or _hours_earth == null or _hours_fixed == null:
@@ -1142,6 +1513,9 @@ func _update_hour_alpha() -> void:
 			if mi is MeshInstance3D and mi.material_override is StandardMaterial3D:
 				_apply_alpha_to_hour_material(mi.material_override, a)
 
+## Rebuilds all 24 hour labels from the `hour_type` setting (none, relative to noon, solar, wall clock or relative to
+## home). Used when the setting, the home location or the label color changes. The minute-by-minute change of
+## wall-clock labels does not use this; see [method _renew_next_hour].
 func _rebuild_hours() -> void:
 	_clear(_hours_earth)
 	_clear(_hours_fixed)
@@ -1155,7 +1529,13 @@ func _rebuild_hours() -> void:
 		(label["parent"] as Node3D).add_child(label["node"])
 		_hour_items.append(label)
 
-## One hour label (k is -12 to 11, the 15 degree step from the sun's, or the home, meridian): returns {node, parent}.
+## Makes one hour label: its text for the current style, placed on the equator at its meridian, reading along the
+## meridian from top to bottom as in Flatland, on the day or night layer. Fixed labels sit in the Sun's frame (the Sun
+## is at longitude 0); wall-clock and home labels turn with the Earth.
+##
+## [param k]: which label, -12 to 11 (the 15 degree step from the Sun's, or the home, meridian).
+## [param utc]: the time, Unix seconds.
+## Returns: {"node": the label, "parent": the node to add it to}.
 func _make_hour_label(k: int, utc: float) -> Dictionary:
 	var kind := Settings.get_string("hour_type")
 	var utc_hours := fposmod(utc, 86400.0) / 3600.0
@@ -1187,8 +1567,9 @@ func _make_hour_label(k: int, utc: float) -> Dictionary:
 	_set_night_layer(mi, label_night)
 	return {"node": mi, "parent": parent}
 
-## Wall-clock labels show new minutes every minute. Making all 24 3D labels at once froze the view for about half a second,
-## so they are renewed one per frame instead (the old label is replaced by the new one in the same frame).
+## Renews the wall-clock labels after the minute changes, one per frame (called every frame; does nothing when none
+## are stale). Making all 24 3D labels at once froze the view for about half a second. The old label is replaced by
+## the new one in the same frame. See [member _hours_stale].
 func _renew_next_hour() -> void:
 	if _hours_stale <= 0:
 		return
@@ -1204,12 +1585,11 @@ func _renew_next_hour() -> void:
 	(fresh["parent"] as Node3D).add_child(fresh["node"])
 	_hour_items[index] = fresh
 
-## Earthquakes in the shape chosen in Preferences (Flatland's EarthquakeShapes): animated or static
-## arrow, sphere, pulsating sphere, pyramid, cone, box, cylinder, capsule or tethered magnitude.
-## Each has the magnitude written on the surface, and quakes inside the "recent" window get the
-## chosen new-earthquake indicator.
-## Throws every quake away and builds them again. Only for a change that affects how all of them look (shape, size, filters,
-## the enabled switch); a feed update goes through `_sync_quakes`, which touches only the quakes that came or went.
+## Throws every quake away and builds them again. Only for a change that affects how all of them look (shape, size,
+## filters, the enabled switch); a feed update goes through [method _sync_quakes], which touches only the quakes that
+## came or went. The shapes are those of Flatland's EarthquakeShapes: animated or static arrow, sphere, pulsating
+## sphere, pyramid, cone, box, cylinder, capsule or tethered magnitude; each has its magnitude written on the surface,
+## and quakes inside the "recent" window get the chosen new-earthquake indicator.
 func _rebuild_quakes() -> void:
 	_clear(_quakes_node)
 	_dn_items = _dn_items.filter(func(i): return not (is_instance_valid(i["node"]) and i["node"].get_parent() != null and _quakes_node.is_ancestor_of(i["node"])))
@@ -1217,8 +1597,9 @@ func _rebuild_quakes() -> void:
 	_quake_nodes.clear()
 	_sync_quakes()
 
-## Brings the drawn quakes in line with the quake list: builds the ones that are new, removes the ones no longer shown, and
-## adds or removes the "new quake" indicator as a quake becomes recent or stops being so. Nothing else is rebuilt.
+## Brings the drawn quakes in line with the quake list: builds the ones that are new, removes the ones no longer
+## shown, and adds or removes the "new quake" indicator as a quake becomes recent or stops being so. Nothing else is
+## rebuilt, so a feed update does not cost a pause.
 func _sync_quakes() -> void:
 	var wanted: Dictionary = {}
 	if Settings.get_bool("enable_earthquakes"):
@@ -1246,6 +1627,12 @@ func _sync_quakes() -> void:
 			_discard_nodes(entry["indicator"])
 			entry["indicator"] = null
 
+## Builds everything for one earthquake: the shape ([method _make_quake_shape]) and its magnitude written on the
+## surface ("M6.4"), colored by magnitude. The nodes are grouped under one Node3D so the quake can be removed in one
+## go ([method _remove_quake]).
+##
+## [param q]: the quake Dictionary.
+## Returns: the group node (already added to the earthquake parent).
 func _build_quake(q: Dictionary) -> Node3D:
 	var group := Node3D.new()
 	_quakes_node.add_child(group)
@@ -1267,20 +1654,38 @@ func _build_quake(q: Dictionary) -> Node3D:
 	_register_dn(t, lat, lon, col, col)
 	return group
 
+## Removes one quake's nodes and forgets it.
+##
+## [param id]: the quake's id (a key of [member _quake_nodes]).
 func _remove_quake(id: String) -> void:
 	_discard_nodes(_quake_nodes[id]["group"])
 	_quake_nodes.erase(id)
 
 ## Frees a node and forgets the day/night and spinning-arrow entries that point into it.
+##
+## [param node]: the node to free.
 func _discard_nodes(node: Node3D) -> void:
 	_dn_items = _dn_items.filter(func(i): return is_instance_valid(i["node"]) and not node.is_ancestor_of(i["node"]))
 	_arrows = _arrows.filter(func(i): return is_instance_valid(i["node"]) and not node.is_ancestor_of(i["node"]))
 	node.queue_free()
 
+## A rotation that stands a shape upright on the surface at a place (its local +Y points away from the globe).
+##
+## [param lat]: latitude.
+## [param lon]: longitude.
+## Returns: the Basis.
 func _quake_basis(lat: float, lon: float) -> Basis:
 	var b := Geo.surface_basis(lat, lon)
 	return Basis(b.x, b.z, b.x.cross(b.z))
 
+## Builds the 3D shape for a quake from the `quake_shape` setting: animated or static arrow, sphere, pulsating sphere,
+## pyramid, cone, box, cylinder, capsule or tethered magnitude. Sizes depend on the magnitude and the `quake_scale`
+## setting; animations (bounce, pulse) are looping tweens that stop when the node is freed. Animated shapes also
+## register for day/night changes.
+##
+## [param q]: the quake Dictionary.
+## [param col]: the color for its magnitude.
+## Returns: the shape's holder node, or null for an unknown shape.
 func _make_quake_shape(q: Dictionary, col: Color) -> Node3D:
 	var mag: float = q["magnitude"]
 	var lat: float = q["lat"]
@@ -1387,8 +1792,13 @@ func _make_quake_shape(q: Dictionary, col: Color) -> Node3D:
 			return _tethered_quake(q, col, mult)
 	return null
 
-## Pole topped with a translucent disc bearing the magnitude; recent quakes also get a spinning rim
-## of spheres (Flatland's TetheredNumber).
+## Builds the "Tethered Magnitude" shape (Flatland's TetheredNumber): a pole topped with a translucent disc bearing
+## the magnitude. Recent quakes also get a spinning rim of gold spheres.
+##
+## [param q]: the quake Dictionary.
+## [param col]: its color.
+## [param mult]: the overall size factor from the `quake_scale` setting.
+## Returns: the holder node.
 func _tethered_quake(q: Dictionary, col: Color, mult: float) -> Node3D:
 	var lat: float = q["lat"]
 	var lon: float = q["lon"]
@@ -1451,10 +1861,19 @@ func _tethered_quake(q: Dictionary, col: Color, mult: float) -> Node3D:
 		tw.tween_property(rim, "rotation:y", PI, speed).as_relative()
 	return holder
 
+## The material for the rim of a tethered quake's disc.
+##
+## [param col]: the quake's color.
+## Returns: a plain material of that color ([method Shapes.plain]).
 func plain_for_rim(col: Color) -> StandardMaterial3D:
 	return Shapes.plain(col)
 
-## New-earthquake indicators (Flatland's EarthquakeIndicators).
+## Adds the "new earthquake" indicator chosen in the `quake_indicator` setting (Flatland's EarthquakeIndicators) to
+## [member _indicator_parent]: a static or animated ring, arrow and ring, radiating rings, glowing sphere, or a ring
+## of triangles moving inward or outward. Animation speed depends on the magnitude (bigger quakes animate faster).
+## Does nothing for "None".
+##
+## [param q]: the quake Dictionary.
 func _add_quake_indicator(q: Dictionary) -> void:
 	var kind := Settings.get_string("quake_indicator")
 	if kind == "None":
@@ -1540,9 +1959,13 @@ func _add_quake_indicator(q: Dictionary) -> void:
 			var tw := spin.create_tween().set_loops()
 			tw.tween_property(spin, "rotation:y", TAU, 10.0 - mag + 2.0).as_relative()
 
-## The "Arrow and Ring" indicator: no animation. An arrow points down at the spot and a ring lies on the
-## surface around it; the arrow's size and its height above the surface, and the ring's radius, all grow in
-## proportion to the magnitude.
+## Adds the "Arrow and Ring" indicator, which does not animate: an arrow points down at the spot and a ring lies on
+## the surface around it. The arrow's size and height above the surface, and the ring's radius, all grow in proportion
+## to the magnitude.
+##
+## [param lat]: latitude.
+## [param lon]: longitude.
+## [param mag]: the magnitude.
 func _add_arrow_and_ring(lat: float, lon: float, mag: float) -> void:
 	var holder := _up_node(lat, lon, R + 0.02)
 	_indicator_parent.add_child(holder)
@@ -1580,6 +2003,13 @@ func _add_arrow_and_ring(lat: float, lon: float, mag: float) -> void:
 
 # MARK: - Time
 
+## Every frame while drawing: re-fits the camera if the view was resized, moves the stars with the camera, updates the
+## satellites, steps the camera flight, spins the earthquake arrows and pole shafts, renews one wall-clock hour label
+## if any are stale, turns the Earth (attract mode, or easing to the clock's angle), counts the once-a-second
+## [method _update_time], and updates the hover. Does nothing while a native dialog covers the window or the app is in
+## the background on a phone.
+##
+## [param delta]: seconds since the last frame.
 func _process(delta: float) -> void:
 	if not PowerManager.drawing():
 		return   # a sheet covers the screen or the app is in the background: nobody sees the globe
@@ -1611,6 +2041,13 @@ func _process(delta: float) -> void:
 		_update_time(false)
 	_update_hover()
 
+## Brings the scene to the current time (called once a second, when the debugger's clock changes, and at start-up).
+## Turns the Earth so the sub-solar longitude faces the Sun, tilts the Earth system by the Sun's declination (the
+## seasons), turns the star frame to the date, places the Moon and the Sun/Moon balls, gives the Earth and cube
+## shaders the Sun direction (the Sun is fixed at +Z) and night level, places the two directional lights, and once a
+## minute refreshes the day/night materials and flags the wall-clock hour labels to be renewed.
+##
+## [param snap]: true to jump the Earth to its angle at once; false to let it ease there.
 func _update_time(snap: bool) -> void:
 	var now := Solar.now()
 	var sub_lon := Solar.subsolar_longitude(now)
@@ -1646,9 +2083,13 @@ func _update_time(snap: bool) -> void:
 
 # MARK: - Camera and interaction
 
+## The Tween animating [method reset_view].
 var _reset_tween: Tween
 
-## Return the camera to its default orientation. Animated over one second unless `animate` is false.
+## Returns the camera to its default orientation (the double click and the Reset button): leaves any special camera
+##   mode, then turns, zooms and un-pans to the start view, taking the short way round in yaw.
+##
+## [param animate]: true (default) to animate over one second, false to jump.
 func reset_view(animate: bool = true) -> void:
 	_leave_special_mode()
 	if _reset_tween != null and _reset_tween.is_valid():
@@ -1675,6 +2116,11 @@ func reset_view(animate: bool = true) -> void:
 		_pan = pan0.lerp(Vector2.ZERO, t)
 		_apply_camera(), 0.0, 1.0, 1.0)
 
+## Places the camera for the current mode and updates everything that depends on it. In orbit mode it sets the pivot
+## rotation, keeps the whole globe in view whatever the window shape, and sets a depth range tight around the globe
+## (so shadows stay sharp), reaching out to the Moon and the satellites when they are shown. In the special modes
+## [method _apply_special_camera] does it. Then it sets the Sun's shadow distance, the hour label opacity and the star
+## sphere size.
 func _apply_camera() -> void:
 	var cam_z: float
 	if _cam_mode == CamMode.ORBIT:
@@ -1709,12 +2155,18 @@ func _apply_camera() -> void:
 		_pixel_angle = deg_to_rad(_camera.fov) / maxf(1.0, vs.y)
 		_place_stars()
 
+## The current camera mode.
+##
+## Returns: the [enum CamMode] as an int.
 func camera_mode() -> int:
 	return _cam_mode
 
-## Moves the camera to a special vantage point (or back to orbiting the Earth with ORBIT), gliding there over a second.
-## FROM_MOON and FROM_SUN follow the moon (the sun is fixed in this scene) so the Earth stays in view; LOOK_AT_MOON stands
-## still and points at the moon as it is now.
+## Moves the camera to a special vantage point, gliding there over a second (or back to orbiting with ORBIT).
+## FROM_MOON and FROM_SUN follow the Moon (the Sun is fixed in this scene) so the Earth stays in view; LOOK_AT_MOON
+## stands still and points at the Moon as it is now; FLIGHT starts the wandering flight ([method _start_flight]).
+## Emits [signal camera_mode_changed].
+##
+## [param mode]: the wanted [enum CamMode].
 func set_camera_mode(mode: int) -> void:
 	if mode == CamMode.ORBIT:
 		_leave_special_mode()
@@ -1735,6 +2187,7 @@ func set_camera_mode(mode: int) -> void:
 	camera_mode_changed.emit(mode)
 	_apply_camera()
 
+## Starts the one-second ease of [member _blend] from 0 to 1 that glides the camera to a new mode's position.
 func _start_blend() -> void:
 	if _blend_tween != null and _blend_tween.is_valid():
 		_blend_tween.kill()
@@ -1745,8 +2198,10 @@ func _start_blend() -> void:
 		_blend = t
 		_apply_camera(), 0.0, 1.0, 1.0)
 
-## Where to stand to look at the moon: where the camera is now if the moon can be seen from there, otherwise the same
-## distance from the Earth's centre but on the moon's side of the Earth.
+## Where to stand to look at the Moon: where the camera is now if the Moon can be seen from there, otherwise the same
+## distance from the Earth's center but on the Moon's side of the Earth.
+##
+## Returns: the camera position for LOOK_AT_MOON.
 func _vantage_to_see_moon() -> Vector3:
 	var here := _camera.global_position
 	var moon := _moon_body.position
@@ -1759,7 +2214,8 @@ func _vantage_to_see_moon() -> Vector3:
 		return here
 	return moon.normalized() * here.length()
 
-## Back to orbiting the Earth, starting from wherever the camera is now.
+## Goes back to orbiting the Earth, starting from wherever the camera is now (its direction and distance become the
+## orbit's yaw, pitch and distance). Does nothing in orbit mode. Emits [signal camera_mode_changed].
 func _leave_special_mode() -> void:
 	if _cam_mode == CamMode.ORBIT:
 		return
@@ -1778,7 +2234,8 @@ func _leave_special_mode() -> void:
 	_apply_camera()
 	camera_mode_changed.emit(CamMode.ORBIT)
 
-## Starts the flight from where the camera is, heading along the surface.
+## Starts the camera flight from where the camera is, heading along the surface at a random wandering altitude, speed,
+## turn rate and view offsets (all [Wander] values).
 func _start_flight() -> void:
 	_fl_rng.randomize()
 	var p := _camera.global_position
@@ -1801,7 +2258,8 @@ func _start_flight() -> void:
 	_fl_obstacle_age = 99.0
 	_fl_avoid = 0.0
 
-## The things the camera must not fly through, refreshed a few times a second: satellites, quake markers and the poles.
+## Rebuilds the list of things the flight must not fly through: visible satellites, quake markers and the pole tips.
+## Called four times a second.
 func _refresh_flight_obstacles() -> void:
 	_fl_obstacles.clear()
 	for item in _sat_items.values():
@@ -1816,9 +2274,13 @@ func _refresh_flight_obstacles() -> void:
 		for h in [1.1, 1.25]:
 			_fl_obstacles.append(_system.global_transform * Vector3(0, pole * R * h, 0))
 
-## One step of the flight. Everything that changes (speed, course, altitude, the yaw and pitch of the view) follows a
-## slowly wandering value, so nothing jerks. Anything near the path turns the course away from it. The altitude is always
-## inside the band around the hour labels.
+## One step of the flight. The speed, course turn, altitude and the yaw and pitch of the view all follow slowly
+## wandering values, so nothing jerks; anything near the path turns the course away from its side (the reaction eased
+## in and out); the altitude stays inside the band around the hour labels; and the pitch is measured from the horizon
+## so the Earth stays in the lower part of the view. The camera moves along a great circle and the view eases toward
+## where it should look.
+##
+## [param delta]: seconds since the last frame (limited to 0.1).
 func _step_flight(delta: float) -> void:
 	delta = minf(delta, 0.1)
 	_fl_obstacle_age += delta
@@ -1862,7 +2324,12 @@ func _step_flight(delta: float) -> void:
 	# Ease the view toward where it should look, so any small step in the target never shows as a jerk.
 	_fl_forward = _fl_forward.slerp(look, 1.0 - exp(-delta * 3.0)).normalized()
 
-## Positions the camera for the current special mode. Returns the camera's distance from the origin.
+## Positions the camera for the current special mode: at the Moon looking at the Earth, at the Sun's side looking at
+## the Earth, at the look-from point looking at the Moon, or at the flight position looking along its view. Sets the
+## field of view (the Earth fills about half the view from the Moon or Sun), depth range and, during the glide, blends
+## from the starting transform.
+##
+## Returns: the camera's distance from the origin (used for the shadow distance).
 func _apply_special_camera() -> float:
 	var moon_pos := _moon_body.position
 	var pos := Vector3.ZERO
@@ -1912,7 +2379,11 @@ func _apply_special_camera() -> float:
 	_camera.far = far_plane
 	return pos.length()
 
-## Rotates the camera so the given location faces the viewer.
+## Rotates the camera so a place faces the viewer (used when the user picks an earthquake). Leaves any special camera
+## mode first.
+##
+## [param lat]: latitude in degrees.
+## [param lon]: longitude in degrees.
 func look_at_location(lat: float, lon: float) -> void:
 	_leave_special_mode()
 	# World direction of the place: local position -> Earth rotation -> seasonal tilt.
@@ -1921,32 +2392,52 @@ func look_at_location(lat: float, lon: float) -> void:
 	_pitch = -asin(clampf(v.y, -1.0, 1.0))
 	_apply_camera()
 
-## Development helper: set yaw/pitch (degrees) and distance directly.
+## Development helper (the `--cam=` flag): sets yaw, pitch and distance directly.
+##
+## [param yaw_deg]: yaw in degrees.
+## [param pitch_deg]: pitch in degrees.
+## [param distance]: camera distance (limited to the zoom range).
 func set_camera(yaw_deg: float, pitch_deg: float, distance: float) -> void:
 	_yaw = deg_to_rad(yaw_deg)
 	_pitch = deg_to_rad(pitch_deg)
 	_distance = clampf(distance, MIN_DISTANCE, MAX_DISTANCE)
 	_apply_camera()
 
+## Tells the globe the size of its view so the camera is re-fitted when it changes.
+##
+## [param size]: the size in pixels.
 func set_viewport_size(size: Vector2) -> void:
 	_vp_size = size
 
+## main.gd tells the globe when the mouse enters or leaves its view, so hover reports stop when outside.
+##
+## [param inside]: true if the mouse is inside.
 func set_mouse_inside(inside: bool) -> void:
 	_mouse_inside = inside
 
+## Emitted when the welcome text appears or goes away, so the Welcome button can update.
+##
+## [param showing]: true when it appeared, false when it finished.
 signal intro_changed(showing: bool)
 
 # MARK: - Satellites
 
+## Satellites farther out than this (in scene units) are drawn at this distance: the true distance of a geostationary
+## satellite is 6.6 Earth radii.
 const SAT_MAX_RADIUS := 70.0
 
-## A satellite: a pill-shaped body with two solar panels, and a small label (name and altitude) beside it.
+## Makes a satellite model (see [method SatelliteModel.build]) and adds it under the Earth's satellite node.
+##
+## [param short_name]: the name for its label.
+## Returns: {"holder", "label", "km", "name"}.
 func _make_satellite(short_name: String) -> Dictionary:
 	var item := SatelliteModel.build(short_name)
 	_sat_node.add_child(item["holder"])
 	return item
 
-## Put every satellite where it is now, pointing along its track.
+## Puts every tracked satellite where it is now, pointing along its track, and updates its label when the altitude
+## changes; hides the ones no longer tracked. Far satellites are drawn closer than their true distance
+## ([constant SAT_MAX_RADIUS]). Hidden when satellites are off.
 func _update_satellites() -> void:
 	var on := Settings.get_bool("show_satellites")
 	_sat_node.visible = on
@@ -1976,15 +2467,21 @@ func _update_satellites() -> void:
 	for id in _sat_items.keys():
 		((_sat_items[id] as Dictionary)["holder"] as Node3D).visible = shown.has(id)   # untracked: not shown
 
-## Shows the welcome text at start-up, if the setting says to.
+## Shows the welcome text at start-up, if the `show_intro` setting says to. main.gd calls it once everything is built.
 func start_intro() -> void:
 	if Settings.get_bool("show_intro"):
 		show_intro()
 
+## Whether the welcome text is on screen.
+##
+## Returns: true while it exists.
 func is_intro_showing() -> bool:
 	return is_instance_valid(_intro)
 
-## Show the welcome text again (it starts its orbit from the beginning).
+## Shows the welcome text (it starts its orbit from the beginning). Does nothing if it is already showing. Emits
+## [signal intro_changed].
+##
+## [param auto_fade]: true to let it fade away after its turns; false to keep it until dismissed.
 func show_intro(auto_fade: bool = true) -> void:
 	if is_instance_valid(_intro):
 		return
@@ -1994,18 +2491,23 @@ func show_intro(auto_fade: bool = true) -> void:
 	_intro.finished.connect(func() -> void: intro_changed.emit(false))
 	intro_changed.emit(true)
 
-## Fade the welcome text out (one second) and remove it.
+## Fades the welcome text out (one second) and removes it.
 func hide_intro() -> void:
 	if is_instance_valid(_intro):
 		_intro.dismiss()
 
+## The Welcome button: hides the text if it is showing, otherwise shows it and keeps it until the user taps the view
+## or the button.
 func toggle_intro() -> void:
 	if is_instance_valid(_intro):
 		hide_intro()
 	else:
 		show_intro(false)   # shown on request: stays until the user taps the view or the button
 
-## The welcome text goes away only for a tap (press and release without moving), not for a drag.
+## Dismisses the welcome text when the user taps (presses and releases without moving more than [constant TAP_SLOP]);
+## a drag or the wheel does not count.
+##
+## [param event]: the input event.
 func _check_intro_tap(event: InputEvent) -> void:
 	if not is_instance_valid(_intro) or not (event is InputEventMouseButton):
 		return
@@ -2017,6 +2519,13 @@ func _check_intro_tap(event: InputEvent) -> void:
 	elif mb.position.distance_to(_tap_start) <= TAP_SLOP:
 		_intro.dismiss()
 
+## Handles mouse input from the globe's container (main.gd connects it): in the special camera modes, the flight and
+## look-at-Moon rules apply ([method _flight_input], [method _zoom_look]); otherwise left drag turns the globe
+## (Command/Option/Ctrl-drag pans it), the wheel and trackpad gestures zoom, double click resets the view, a long
+## press (phones) or right click asks for the context menu ([signal context_requested]), and movement reports hover
+## and star tooltips. All of it is ignored while the world is locked (apart from dismissing the welcome text).
+##
+## [param event]: the input event.
 func handle_gui_input(event: InputEvent) -> void:
 	_check_intro_tap(event)
 	if Settings.get_bool("world_locked"):
@@ -2082,10 +2591,17 @@ func handle_gui_input(event: InputEvent) -> void:
 		_pitch = clampf(_pitch + pg.delta.y * 0.01, -1.45, 1.45)
 		_apply_camera()
 
+## Counts presses so a pending long-press timer can tell it was cancelled (the finger moved, lifted, or another press
+## started).
 var _press_token := 0
+## Where the current press began, in pixels.
 var _long_press_at := Vector2.ZERO
 
-## On a phone or tablet, holding a finger still for a moment asks for the context menu.
+## On a phone or tablet, holds a finger still for about 0.6 seconds to ask for the context menu
+## ([signal context_requested]); cancelled if the finger moves, lifts, or a second finger joins. Does nothing on a
+## desktop.
+##
+## [param pos]: where the press began, in pixels.
 func _begin_long_press(pos: Vector2) -> void:
 	_long_press_at = pos
 	if not Layout.is_phone():
@@ -2098,7 +2614,10 @@ func _begin_long_press(pos: Vector2) -> void:
 		_press_token += 1
 		context_requested.emit(pos)
 
-## During the flight the camera ignores dragging and zooming; a double click ends it (back to the normal view).
+## Input during the camera flight: dragging and zooming are ignored; a double click ends the flight (Reset View); a
+## right click or long press still asks for the context menu.
+##
+## [param event]: the input event.
 func _flight_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -2117,7 +2636,10 @@ func _flight_input(event: InputEvent) -> void:
 		if (event as InputEventMouseMotion).position.distance_to(_long_press_at) > TAP_SLOP * 2.0:
 			_press_token += 1
 
-## Looking at the moon: the wheel and the trackpad pinch zoom by narrowing or widening the field of view. True if used.
+## Looking at the Moon: the wheel and the trackpad pinch zoom by narrowing or widening the field of view.
+##
+## [param event]: the input event.
+## Returns: true if the event was used.
 func _zoom_look(event: InputEvent) -> bool:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -2132,12 +2654,17 @@ func _zoom_look(event: InputEvent) -> bool:
 		return true
 	return false
 
-## factor > 1 zooms in.
+## Zooms the view of the Moon (the field of view, within [constant LOOK_FOV_MIN] to [constant LOOK_FOV_MAX]).
+##
+## [param factor]: greater than 1 zooms in.
 func zoom_look(factor: float) -> void:
 	_look_fov = clampf(_look_fov / factor, LOOK_FOV_MIN, LOOK_FOV_MAX)
 	_apply_camera()
 
-## Whether an input event would turn, pan or zoom the camera.
+## Whether an input event would turn, pan or zoom the camera (such an event ends a special camera mode).
+##
+## [param event]: the input event.
+## Returns: true if it would.
 func _moves_camera(event: InputEvent) -> bool:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -2146,14 +2673,20 @@ func _moves_camera(event: InputEvent) -> bool:
 		return _dragging and not _pinching
 	return event is InputEventMagnifyGesture or event is InputEventPanGesture
 
-## Two-finger pinch on a touch screen (driven by main.gd). While two fingers are down the
-## one-finger drag that Godot emulates from the first finger must not also spin the globe.
+## True while two fingers are down, so the one-finger drag that Godot emulates from the first finger does not also
+## spin the globe.
 var _pinching := false
 
+## main.gd tells the globe when a two-finger pinch starts or ends.
+##
+## [param on]: true while pinching.
 func set_pinching(on: bool) -> void:
 	_pinching = on
 
-## factor > 1 means the fingers moved apart (zoom in), like the trackpad magnify gesture.
+## Two-finger pinch on a touch screen (driven by main.gd): zooms the camera (or the view of the Moon), unless the
+## world is locked or the flight is running. Moving the camera ends other special modes.
+##
+## [param factor]: greater than 1 when the fingers move apart (zoom in), like the trackpad magnify gesture.
 func pinch_zoom(factor: float) -> void:
 	if Settings.get_bool("world_locked"):
 		return
@@ -2166,7 +2699,10 @@ func pinch_zoom(factor: float) -> void:
 	_distance = clampf(_distance / factor, MIN_DISTANCE, MAX_DISTANCE)
 	_apply_camera()
 
-## Intersect a screen point with the globe and return {"hit": bool, "lat": f, "lon": f}.
+## Finds the place on the Earth under a screen position by casting a ray from the camera and intersecting the sphere.
+##
+## [param screen_pos]: position in pixels.
+## Returns: {"hit": false} if the ray misses the Earth, otherwise {"hit": true, "lat": ..., "lon": ...}.
 func pick(screen_pos: Vector2) -> Dictionary:
 	var origin := _camera.project_ray_origin(screen_pos)
 	var dir := _camera.project_ray_normal(screen_pos)
@@ -2183,6 +2719,8 @@ func pick(screen_pos: Vector2) -> Dictionary:
 	var ll := Geo.vec3_to_latlon(local_pt)
 	return {"hit": true, "lat": ll.x, "lon": ll.y}
 
+## Reports the place under the mouse with [signal hover_changed], if the mouse is inside the view and `mouse_tracking`
+## is on.
 func _update_hover() -> void:
 	if not _mouse_inside or not Settings.get_bool("mouse_tracking"):
 		return
@@ -2192,10 +2730,16 @@ func _update_hover() -> void:
 	else:
 		hover_changed.emit(0.0, 0.0, false)
 
+## Emits [signal location_clicked] for the place at a screen position, if it is on the Earth.
+##
+## [param pos]: position in pixels.
 func _emit_click(pos: Vector2) -> void:
 	var p := pick(pos)
 	if p["hit"]:
 		location_clicked.emit(p["lat"], p["lon"])
 
+## Takes a picture of the globe's viewport.
+##
+## Returns: the Image.
 func capture() -> Image:
 	return get_viewport().get_texture().get_image()

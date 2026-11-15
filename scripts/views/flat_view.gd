@@ -4,29 +4,59 @@ extends Control
 ## equirectangular ("Rectangular") map. The map turns with the Earth beneath a fixed day/night
 ## mask, exactly as in the original; hour labels ring the map; the sun sits at the rim.
 
+## Emitted as the mouse moves over the map (when the `mouse_tracking` setting is on) and when it leaves.
+##
+## [param lat]: latitude under the mouse (0 when not over the map).
+## [param lon]: longitude under the mouse.
+## [param over_map]: true if the mouse is over the map itself.
 signal hover_changed(lat: float, lon: float, over_map: bool)
+## Emitted when the user right-clicks, or double-clicks with the left button, on the map, so main.gd can show the
+## What's Here popup.
+##
+## [param lat]: the clicked latitude.
+## [param lon]: the clicked longitude.
 signal location_clicked(lat: float, lon: float)
 
 
+## Which flat map this draws: [constant Settings.VIEW_FLAT_NORTH], [constant Settings.VIEW_FLAT_SOUTH] or
+## [constant Settings.VIEW_RECT]. Change it with [method set_view].
 var view_type := Settings.VIEW_FLAT_NORTH
-## When shown on a plane in 3D (FlatStage) the stage draws the sun and handles the mouse.
+## True when this control is drawn onto a plane in 3D by [FlatStage]: the stage then draws the Sun, hour labels,
+## cities and satellites as 3D objects and handles the mouse, and this draws only the map, grid and rings.
 var stage_mode := false
 
+## The map picture currently drawn; null until it has loaded.
 var _map_tex: Texture2D
+## File name of the map being drawn (a polar one for the polar views, the globe one for the rectangular view).
 var _map_file := ""
+## The ColorRect that carries the night-shading shader over the map.
 var _night: ColorRect
+## The ShaderMaterial of the night shading (see `shaders/night.gdshader`); fed the Sun's position by
+## [method _update_night].
 var _night_mat: ShaderMaterial
+## Brightness factor for the map (always 1.0: the per-map multiplier made maps too dark).
 var _light := 1.0
+## Optional picture of the sea, drawn under the rectangular map; null if the map has none.
 var _sea_tex: Texture2D
+## File name of that sea picture ("" if none).
 var _sea_file := ""
+## The Sun picture for the south-centered and rectangular maps.
 var _sun_tex_up: Texture2D = load("res://Assets/Suns/Sun2Up.png")
+## The Sun picture for the north-centered map.
 var _sun_tex_down: Texture2D = load("res://Assets/Suns/Sun2Down.png")
+## Seconds since the last once-a-second [method refresh].
 var _tick := 0.0
+## The time (Unix, UTC) of the last [method refresh]; all drawing uses it so one frame is consistent.
 var _now := 0.0
+## Sub-solar longitude at [member _now].
 var _sub_lon := 0.0
+## Solar declination at [member _now].
 var _decl := 0.0
+## The font for labels (see [method Geo.label_font]).
 var _font: Font
 
+## Sets up the label font, the night-shading overlay and the connections that keep the map current: user data
+## (locations, regions), settings, map textures, quakes and resizing.
 func _ready() -> void:
 	_font = Geo.label_font()
 	_night_mat = ShaderMaterial.new()
@@ -46,11 +76,17 @@ func _ready() -> void:
 		queue_redraw())
 	refresh()
 
+## Switches to another flat map.
+##
+## [param type]: [constant Settings.VIEW_FLAT_NORTH], [constant Settings.VIEW_FLAT_SOUTH] or
+##   [constant Settings.VIEW_RECT].
 func set_view(type: String) -> void:
 	view_type = type
 	_map_tex = null
 	refresh()
 
+## Re-reads the time and Sun position, asks for the map picture, updates the night shading and redraws. Called each
+## second and when the clock is changed in the debugger.
 func refresh() -> void:
 	_now = Solar.now()
 	_sub_lon = Solar.subsolar_longitude(_now)
@@ -59,6 +95,11 @@ func refresh() -> void:
 	_update_night()
 	queue_redraw()
 
+## A setting changed: refreshes the label font and the map choice and redraws; a debugger clock change refreshes the
+## time too.
+##
+## [param key]: the setting's key.
+## [param _v]: its new value (unused).
 func _on_setting_changed(key: String, _v: Variant) -> void:
 	if key == "label_font":
 		_font = Geo.label_font()
@@ -67,6 +108,8 @@ func _on_setting_changed(key: String, _v: Variant) -> void:
 	_request_map()
 	queue_redraw()
 
+## Chooses the map file for the current view from the `map_type` setting (north, south or globe file) and asks
+## [MapCatalog] for it, and for the sea picture on the rectangular map. The pictures are stored when they arrive.
 func _request_map() -> void:
 	var m := MapCatalog.map_for(Settings.get_string("map_type"))
 	if m.is_empty():
@@ -85,7 +128,8 @@ func _request_map() -> void:
 	if t != null:
 		_map_tex = t
 
-## Position the shader overlay over the map and feed it the sun's position.
+## Positions the night-shading overlay over the map (a circle for the polar maps, a rectangle otherwise) and gives its
+## shader the Sun's declination and longitude and the darkness. Hidden when `show_night` is off.
 func _update_night() -> void:
 	if _night == null:
 		return
@@ -104,6 +148,10 @@ func _update_night() -> void:
 	_night_mat.set_shader_parameter("sun_longitude", _sub_lon)
 	_night_mat.set_shader_parameter("night_alpha", _night_alpha())
 
+## A map picture finished loading: stores it if it is the one needed and redraws.
+##
+## [param file_name]: the file that arrived.
+## [param tex]: its texture.
 func _on_texture_ready(file_name: String, tex: Texture2D) -> void:
 	if file_name == _map_file:
 		_map_tex = tex
@@ -111,6 +159,10 @@ func _on_texture_ready(file_name: String, tex: Texture2D) -> void:
 		_sea_tex = tex
 	queue_redraw()
 
+## Every frame: redraws if something animates (quake rings, satellites) and calls [method refresh] once a second. Does
+## nothing while drawing is paused (see [method PowerManager.drawing]).
+##
+## [param delta]: seconds since the last frame.
 func _process(delta: float) -> void:
 	if not PowerManager.drawing():
 		return   # a sheet covers the screen (or the app is in the background): skip the redraw work too
@@ -123,47 +175,78 @@ func _process(delta: float) -> void:
 
 # MARK: - Geometry
 
-## UI scale factor so labels and markers grow with the window.
+## The factor that makes labels and markers grow with the window.
+##
+## Returns: the smaller side of the window over 900, kept between 0.6 and 3.
 func _k() -> float:
 	return clampf(minf(size.x, size.y) / 900.0, 0.6, 3.0)
 
+## The grid line color setting.
+##
+## Returns: the Color.
 func _grid_col() -> Color:
 	return Settings.get_color("color_grid")
 
+## Whether the current view is one of the two polar maps.
+##
+## Returns: true for north- or south-centered.
 func _is_polar() -> bool:
 	return view_type == Settings.VIEW_FLAT_NORTH or view_type == Settings.VIEW_FLAT_SOUTH
 
+## The center of the control, in pixels.
+##
+## Returns: a Vector2.
 func _center() -> Vector2:
 	return size * 0.5
 
-## The polar map is kept well inside the picture so the hour ring and the clock have room around it.
+## The radius of the polar map: 39 percent of the smaller side, so the hour ring and the clock have room around it.
+##
+## Returns: pixels.
 func _map_radius() -> float:
 	return minf(size.x, size.y) * 0.39
 
-## Offset of an object's shadow on the map: away from the sun, longer for taller objects. The shadows are in
-## relation to the sun's position, not to a scene light.
+## Where an object's shadow falls on the map: away from the Sun, longer for taller things. Shadows relate to the Sun's
+## position, not to a scene light.
+##
+## [param p]: the object's position in pixels.
+## [param height]: its height (in pixels at k = 1).
+## Returns: the offset to add to [param p].
 func _shadow_offset(p: Vector2, height: float) -> Vector2:
 	var away := p - sun_picture_position()
 	if away.length() < 1.0:
 		away = Vector2(1.0, 1.0)
 	return away.normalized() * height * _k()
 
-## Where the sun is, in picture pixels (used by the 3D stage to float the sun above the map).
+## Where the Sun is, in picture pixels: above the sub-solar point on every flat map. FlatStage uses this to float the
+## Sun above the map.
+##
+## Returns: a Vector2.
 func sun_picture_position() -> Vector2:
 	return project(_decl, _sub_lon)      # over the sub-solar point on every flat map
 
+## The rectangle the rectangular map fills: as wide as fits (twice as wide as tall), centered, leaving room for
+## labels.
+##
+## Returns: a Rect2 in pixels.
 func _rect_map() -> Rect2:
 	var w := minf(size.x * 0.97, (size.y - 130.0 * _k()) * 2.0)
 	var h := w * 0.5
 	return Rect2((size.x - w) * 0.5, (size.y - h) * 0.5 + 8.0, w, h)
 
-## Counter-clockwise rotation (degrees) of the polar map for the current time.
+## How far the polar map is turned for the current time: the map turns with the Earth beneath a fixed day/night mask.
+##
+## Returns: degrees, counter-clockwise.
 func _map_rotation_ccw() -> float:
 	if view_type == Settings.VIEW_FLAT_NORTH:
 		return 180.0 - _sub_lon
 	return _sub_lon
 
-## Screen position of a location. For polar maps, `radius_scale` pushes the point outward.
+## Converts a place on the Earth to a position on the map.
+##
+## [param lat]: latitude in degrees.
+## [param lon]: longitude in degrees.
+## [param radius_scale]: for polar maps, multiplies the distance from the center, to push a point outward (default 1).
+## Returns: pixel position. The reverse is [method pick].
 func project(lat: float, lon: float, radius_scale: float = 1.0) -> Vector2:
 	if view_type == Settings.VIEW_RECT:
 		var r := _rect_map()
@@ -180,7 +263,10 @@ func project(lat: float, lon: float, radius_scale: float = 1.0) -> Vector2:
 	rr *= radius_scale
 	return _center() + Vector2(cos(ang), -sin(ang)) * rr
 
-## Inverse of `project` for the current frame; returns {"hit", "lat", "lon"}.
+## Converts a pixel position back to a place on the Earth (the inverse of [method project] for the current frame).
+##
+## [param p]: pixel position.
+## Returns: {"hit": false} if outside the map, otherwise {"hit": true, "lat": ..., "lon": ...}.
 func pick(p: Vector2) -> Dictionary:
 	if view_type == Settings.VIEW_RECT:
 		var r := _rect_map()
@@ -200,6 +286,8 @@ func pick(p: Vector2) -> Dictionary:
 
 # MARK: - Drawing
 
+## Draws the whole map: the picture and grid (polar or rectangular), earthquake regions, cities, points of interest,
+## quakes, satellites and the Sun/Moon balls. In [member stage_mode] the 3D stage supplies some of these instead.
 func _draw() -> void:
 	if _is_polar():
 		_draw_polar()
@@ -212,7 +300,9 @@ func _draw() -> void:
 	_draw_satellites()
 	_draw_solar_lunar_points()
 
-## The glossy balls under the sun (yellow) and the moon (bright blue), drawn as discs with a highlight.
+## Draws the balls under the Sun (yellow) and Moon (blue) as discs with a glow, an outline and a highlight, sized from
+## [constant SolarLunarMarker.MAP_FRACTION]. Each one follows its own setting. Skipped in [member stage_mode]
+## (FlatStage draws them as 3D balls).
 func _draw_solar_lunar_points() -> void:
 	if stage_mode:
 		return
@@ -233,9 +323,14 @@ func _draw_solar_lunar_points() -> void:
 		draw_arc(p, r, 0.0, TAU, 24, color.darkened(0.45), 1.5, true)
 		draw_circle(p + Vector2(-0.3, -0.35) * r, r * 0.35, Color(1, 1, 1, 0.75))   # the highlight
 
+## The opacity of the night shading, from the `night_darkness` setting (a little lighter than the table value).
+##
+## Returns: 0 to 1.
 func _night_alpha() -> float:
 	return float(Settings.NIGHT_ALPHA.get(Settings.get_string("night_darkness"), 0.4)) * 0.7   # lighter than before
 
+## Draws a polar map: the picture turned with the Earth (or a dark circle until it loads), then the grid, hour labels
+## and the Sun.
 func _draw_polar() -> void:
 	var c := _center()
 	var rad := _map_radius()
@@ -251,6 +346,8 @@ func _draw_polar() -> void:
 	_draw_polar_hours()
 	_draw_sun()
 
+## Draws the polar map's grid: circles of latitude (equator, tropics, polar circles), the 24 hour meridians and the
+## noon line, as the settings allow.
 func _draw_polar_grid() -> void:
 	if not Settings.get_bool("show_grid"):
 		return
@@ -282,9 +379,15 @@ func _draw_polar_grid() -> void:
 		var dir := Vector2(0, 1) if view_type == Settings.VIEW_FLAT_NORTH else Vector2(0, -1)
 		draw_line(c, c + dir * rad, Settings.get_color("color_grid"), 2.5, true)
 
+## The direction from the center toward the Sun's symbol: down on the north map, up on the south map.
+##
+## Returns: a unit Vector2.
 func _sun_direction() -> Vector2:
 	return Vector2(0, 1) if view_type == Settings.VIEW_FLAT_NORTH else Vector2(0, -1)
 
+## Draws the 24 hour labels on a ring round the polar map (text outlined in black), flipped on the lower half so it
+## stays readable. Skipped in [member stage_mode] (see [method hour_label_specs]). The label text depends on the
+## `hour_type` setting.
 func _draw_polar_hours() -> void:
 	if stage_mode:
 		return      # on the 3D stage the hours are extruded 3D text (see hour_label_specs)
@@ -326,8 +429,10 @@ func _draw_polar_hours() -> void:
 		draw_string(_font, Vector2(-w * 0.5, fsize * 0.35), text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Settings.get_color("color_hours_2d"))
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-## The hour labels as data, for the 3D stage to build extruded text from: an Array of
-## {"text", "pos" (picture pixels, the centre of the text), "rot" (radians, canvas rotation), "size" (pixels)}.
+## The hour labels as data, for FlatStage to build extruded 3D text from.
+##
+## Returns: an Array of {"text", "pos" (pixels, the center of the text), "rot" (radians, canvas rotation), "size"
+##   (pixels)}; empty when hours are off. See [method _draw_polar_hours].
 func hour_label_specs() -> Array:
 	var out: Array = []
 	var kind := Settings.get_string("hour_type")
@@ -379,18 +484,25 @@ func hour_label_specs() -> Array:
 			out.append({"text": text, "pos": Vector2(project(0.0, lon).x, r.end.y + 26.0 * _k() - 6.0 * _k()), "rot": 0.0, "size": 20.0 * _k()})
 	return out
 
-## Screen angle (CCW degrees) of the meridian at `lon` for the current map rotation.
+## The screen angle of a meridian for the current map rotation.
+##
+## [param lon]: longitude in degrees.
+## Returns: counter-clockwise degrees.
 func _angle_of_lon(lon: float) -> float:
 	if view_type == Settings.VIEW_FLAT_NORTH:
 		return 90.0 + lon + _map_rotation_ccw()
 	return 90.0 - lon + _map_rotation_ccw()
 
-## Fixed-to-sun hour positions: `k` hours east of solar noon.
+## The screen angle of an hour label that is fixed to the Sun.
+##
+## [param k]: hours east of solar noon (0 to 23).
+## Returns: counter-clockwise degrees.
 func _noon_angle(k: int) -> float:
 	if view_type == Settings.VIEW_FLAT_NORTH:
 		return 270.0 + 15.0 * k
 	return 90.0 - 15.0 * k
 
+## Draws the Sun picture at the rim of the polar map, if the Sun is shown. Skipped in [member stage_mode].
 func _draw_sun() -> void:
 	if stage_mode or not Settings.get_bool("show_sun"):
 		return
@@ -405,6 +517,8 @@ func _draw_sun() -> void:
 	else:
 		draw_circle(pos, d * 0.5, Color("#f08a1c"))
 
+## Draws the rectangular map: background, sea, picture, grid, the Sun at the sub-solar point with the noon meridian,
+## and the hour labels along the bottom edge.
 func _draw_rectangular() -> void:
 	var r := _rect_map()
 	draw_rect(r, Color("#16264a"))
@@ -454,6 +568,8 @@ func _draw_rectangular() -> void:
 			draw_string_outline(_font, Vector2(x - w * 0.5, r.end.y + 26 * _k()), text, HORIZONTAL_ALIGNMENT_LEFT, -1, int(20 * _k()), 4, Color(0, 0, 0, 0.8))
 			draw_string(_font, Vector2(x - w * 0.5, r.end.y + 26 * _k()), text, HORIZONTAL_ALIGNMENT_LEFT, -1, int(20 * _k()), Settings.get_color("color_hours_2d"))
 
+## Draws the cities chosen by [method CityDB.filtered_cities] (a shadowed dot, and the name in a day or night color).
+## Only the names in [member stage_mode], where cities are 3D shapes.
 func _draw_cities() -> void:
 	if not Settings.get_bool("show_cities"):
 		return
@@ -470,6 +586,8 @@ func _draw_cities() -> void:
 			var col := Color("#0a1f6b") if day else Color("#63b8ff")
 			draw_string(_font, p + Vector2(7, 4) * _k(), str(city["Name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, int(14 * _k()), col)
 
+## Draws the user's and built-in points of interest as colored diamonds with their names, if the `show_user_pois`
+## setting is on.
 func _draw_pois() -> void:
 	if not Settings.get_bool("show_user_pois"):
 		return
@@ -480,6 +598,7 @@ func _draw_pois() -> void:
 		draw_colored_polygon(PackedVector2Array([p + Vector2(0, -d), p + Vector2(d, 0), p + Vector2(0, d), p + Vector2(-d, 0)]), col)
 		draw_string(_font, p + Vector2(d + 3, 4) * 1.0, str(poi["Name"]), HORIZONTAL_ALIGNMENT_LEFT, -1, int(14 * _k()), col)
 
+## Draws the enabled earthquake regions as colored rectangles (following the map's curvature on the polar maps).
 func _draw_regions() -> void:
 	if not Settings.get_bool("show_regions"):
 		return
@@ -509,6 +628,11 @@ func _draw_regions() -> void:
 		else:
 			draw_polyline(pts, col, 2.0 * _k(), true)
 
+## Draws a polyline on the rectangular map, skipping any segment that jumps across the antimeridian (the edge of the
+## map), so no line is drawn across the whole picture.
+##
+## [param pts]: the points in pixels.
+## [param col]: the color.
 func continue_polyline(pts: PackedVector2Array, col: Color) -> void:
 	# Rectangular map: skip the segment that wraps across the antimeridian.
 	var run := PackedVector2Array()
@@ -521,6 +645,9 @@ func continue_polyline(pts: PackedVector2Array, col: Color) -> void:
 	if run.size() > 1:
 		draw_polyline(run, col, 2.0, true)
 
+## Draws the earthquakes: for recent ones (within 24 hours) the "Arrow and Ring" or a radiating ring depending on the
+## `quake_indicator` setting, a shadowed colored disc sized by magnitude (not in [member stage_mode]), and the
+## magnitude number.
 func _draw_quakes() -> void:
 	if not Settings.get_bool("enable_earthquakes"):
 		return
@@ -541,8 +668,11 @@ func _draw_quakes() -> void:
 			draw_arc(p, (3.0 + q["magnitude"] * 0.7) * _k(), 0.0, TAU, 20, col, 1.0, true)
 		draw_string(_font, p + Vector2(8, -8), "%.1f" % q["magnitude"], HORIZONTAL_ALIGNMENT_LEFT, -1, int(26 * _k()), col)
 
-## The still "Arrow and Ring" indicator: a ring around the spot and a down-pointing arrow above it. The ring's
-## radius, the arrow's size and its height above the spot all grow in proportion to the magnitude.
+## Draws the still "Arrow and Ring" marker: a ring round the spot and a down-pointing arrow above it, both growing
+## with the magnitude.
+##
+## [param p]: the quake's position in pixels.
+## [param mag]: its magnitude.
 func _draw_arrow_and_ring(p: Vector2, mag: float) -> void:
 	var k := _k()
 	var red := Color(1.0, 0.14, 0.0, 0.9)
@@ -555,8 +685,8 @@ func _draw_arrow_and_ring(p: Vector2, mag: float) -> void:
 	draw_colored_polygon(PackedVector2Array([tip, tip + Vector2(hw, -0.667 * s), tip + Vector2(-hw, -0.667 * s)]), red)
 	draw_rect(Rect2(neck + Vector2(-sw, -1.0 * s), Vector2(2.0 * sw, 1.0 * s + 0.5 * k)), red)
 
-## Satellites: a pill-shaped body with two solar panels, turned along the satellite's track, and a small
-## label (name and altitude) beside it.
+## Draws every tracked satellite ([method SatelliteService.positions]): a shadow, the satellite turned along its track
+## and a label with its name and altitude. Skipped in [member stage_mode] (satellites are 3D models there).
 func _draw_satellites() -> void:
 	if stage_mode or not Settings.get_bool("show_satellites"):
 		return      # on the 3D stage satellites are 3D models floating over the map
@@ -575,7 +705,11 @@ func _draw_satellites() -> void:
 		draw_string_outline(_font, p + Vector2(20.0, -12.0) * k, text, HORIZONTAL_ALIGNMENT_LEFT, -1, int(15 * k), 5, Color.BLACK)
 		draw_string(_font, p + Vector2(20.0, -12.0) * k, text, HORIZONTAL_ALIGNMENT_LEFT, -1, int(15 * k), Color("#fff2b0"))
 
-## A pill-shaped body with two solar panels, drawn at `p` along `heading`; as a dark silhouette for a shadow.
+## Draws one satellite (or its shadow): a pill-shaped body with two solar panels, turned to a heading.
+##
+## [param p]: position in pixels.
+## [param heading]: rotation in radians along the track.
+## [param shadow]: true to draw a dark translucent silhouette instead.
 func _draw_satellite_shape(p: Vector2, heading: float, shadow: bool) -> void:
 	var k := _k()
 	var body := StyleBoxFlat.new()
@@ -597,6 +731,10 @@ func _draw_satellite_shape(p: Vector2, heading: float, shadow: bool) -> void:
 
 # MARK: - Input
 
+## Mouse handling: movement reports the place under the mouse ([signal hover_changed]); a right click or double click
+## on the map emits [signal location_clicked].
+##
+## [param event]: the input event.
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Settings.get_bool("mouse_tracking"):
 		var p := pick((event as InputEventMouseMotion).position)
@@ -608,6 +746,9 @@ func _gui_input(event: InputEvent) -> void:
 			if p["hit"]:
 				location_clicked.emit(p["lat"], p["lon"])
 
+## When the mouse leaves the control, tells listeners it is no longer over the map.
+##
+## [param what]: the notification constant.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_MOUSE_EXIT:
 		hover_changed.emit(0.0, 0.0, false)

@@ -4,17 +4,26 @@ extends Node
 ## from a two-body orbit with the J2 correction. That is accurate to a few kilometres to a few tens of
 ## kilometres for days after the element set, which is plenty for a picture of satellites on a map.
 
+## Emitted when a fresh set of satellite elements has been downloaded and saved.
 signal updated
 
+## CelesTrak URL for one satellite's element set (TLE). The `%d` is the NORAD catalogue number.
 const URL_FORMAT := "https://celestrak.org/NORAD/elements/gp.php?CATNR=%d&FORMAT=tle"
+## File where the downloaded element sets are kept, so satellites show at once next time and offline.
 const CACHE_PATH := "user://satellites.tle"
+## How old the saved elements may get (12 hours) before [method refresh_if_stale] downloads new ones.
 const MAX_AGE_SECONDS := 12.0 * 3600.0
+## Mean Earth radius in km, used to turn a distance from the center into an altitude.
 const EARTH_RADIUS_KM := 6371.0
+## Equatorial Earth radius in km, used by the J2 correction in [method position_of].
 const EARTH_EQUATORIAL_KM := 6378.137
-const MU := 398600.4418      # km^3 / s^2
+## Earth's gravitational parameter, in km^3 per second squared; gives an orbit's size from its speed.
+const MU := 398600.4418
+## The Earth's oblateness coefficient; makes the orbit's plane and perigee slowly turn (the "J2 correction").
 const J2 := 1.08262668e-3
 
-## NORAD catalogue number and short name of every satellite that can be tracked.
+## Every satellite that can be tracked: [NORAD catalogue number, short name]. Which ones are drawn is the
+## `tracked_satellites` setting (see [method tracked_ids]).
 const CATALOG := [
 	[25544, "ISS"], [48274, "Tiangong"], [20580, "Hubble"], [27386, "Envisat"], [25994, "Terra"],
 	[27424, "Aqua"], [28931, "ALOS"], [39766, "ALOS-2"], [16908, "Ajisai"], [29228, "Resurs-DK1"],
@@ -23,23 +32,36 @@ const CATALOG := [
 	[64723, "MTG-S1"], [65159, "MetOp-SG A1"], [28912, "Meteosat-9"], [39216, "INSAT-3D"],
 ]
 
-## Satellites at the Sun-Earth L2 point (1.5 million km from the Earth, opposite the Sun). No orbit data is
-## published for them, so they are placed at the anti-solar point.
-## Webb (50463) and the Nancy Grace Roman Space Telescope (100532, launched 2026-08-30) are at L2.
+## Satellites at the Sun-Earth L2 point (1.5 million km from the Earth, opposite the Sun): Webb (50463) and the Nancy
+## Grace Roman Space Telescope (100532, launched 2026-08-30). No orbit data is published for them, so
+## [method position_of] places them at the anti-solar point.
 const L2_IDS := [50463, 100532]
-## Small offsets (degrees) so two L2 satellites do not sit exactly on top of each other on the map.
+## Small offsets (latitude, longitude in degrees) per L2 satellite so two of them do not sit exactly on top of each
+## other on the map.
 const L2_OFFSETS := {50463: Vector2(0.0, 0.0), 100532: Vector2(3.0, 8.0)}
+## Altitude given to L2 satellites, in km.
 const L2_ALTITUDE_KM := 1500000.0
 
-var elements: Dictionary = {}     # NORAD id -> parsed orbital elements
-var _raw: Dictionary = {}         # NORAD id -> its three element lines, kept for the cache
+## Parsed orbital elements by NORAD id: "epoch" (Unix s), "inc", "raan", "argp", "ma" (radians), "ecc", "n" (rad/s),
+## "a" (km), plus "id" and "label". Filled by [method _parse].
+var elements: Dictionary = {}
+## Each satellite's three TLE lines by NORAD id, kept so they can be written to [constant CACHE_PATH].
+var _raw: Dictionary = {}
+## NORAD ids still to download in the current refresh; one is requested at a time.
 var _fetch_queue: Array = []
+## How many downloads in the current refresh gave usable data.
 var _fetch_ok := 0
+## True while a refresh is running, so another is not started.
 var _fetching := false
+## Text about the latest fetch for the Live Data dialog.
 var last_status := "No satellite data yet"
+## When the elements were last downloaded (Unix seconds); for a cache load, the file's modified time.
 var last_fetch_unix := 0.0
+## The HTTPRequest node that downloads the element sets.
 var _request: HTTPRequest
 
+## Creates the HTTP request, loads the saved elements, and starts watching the `show_satellites` setting so turning
+## satellites on fetches fresh data if the saved ones are stale.
 func _ready() -> void:
 	_request = HTTPRequest.new()
 	_request.timeout = 30.0
@@ -51,19 +73,34 @@ func _ready() -> void:
 			refresh_if_stale())
 	refresh_if_stale()
 
+## Whether satellites are switched on.
+##
+## Returns: the `show_satellites` setting.
 func is_enabled() -> bool:
 	return Settings.get_bool("show_satellites")
 
-## Which satellites are tracked is stored as a comma-separated list of NORAD ids.
+## The NORAD ids of the satellites the user chose to show (the `tracked_satellites` setting is a comma-separated
+## list).
+##
+## Returns: an Array of ints.
 func tracked_ids() -> Array:
 	var ids: Array = []
 	for part in Settings.get_string("tracked_satellites").split(",", false):
 		ids.append(int(part))
 	return ids
 
+## Whether one satellite is chosen.
+##
+## [param id]: NORAD id.
+## Returns: true if it is in [method tracked_ids].
 func is_tracked(id: int) -> bool:
 	return tracked_ids().has(id)
 
+## Chooses or un-chooses a satellite and saves the setting, keeping [constant CATALOG] order so the stored text is
+## stable.
+##
+## [param id]: NORAD id.
+## [param on]: true to track it, false to stop.
 func set_tracked(id: int, on: bool) -> void:
 	var ids := tracked_ids()
 	if on and not ids.has(id):
@@ -77,6 +114,8 @@ func set_tracked(id: int, on: bool) -> void:
 			ordered.append(str(entry[0]))
 	Settings.set_value("tracked_satellites", ",".join(ordered))
 
+## Downloads new elements if satellites are on and either some catalogue entry has no elements or the data is older
+## than [constant MAX_AGE_SECONDS]. Does nothing if satellites are off. See [method refresh].
 func refresh_if_stale() -> void:
 	if not is_enabled():
 		return
@@ -87,6 +126,9 @@ func refresh_if_stale() -> void:
 	if missing or Time.get_unix_time_from_system() - last_fetch_unix > MAX_AGE_SECONDS:
 		refresh()
 
+## Starts downloading the element set of every catalogue satellite (except the L2 ones, which need none), one request
+## after another. Does nothing if a refresh is already running. Progress goes through [method _fetch_next],
+## [method _on_completed] and [method _finish_fetch].
 func refresh() -> void:
 	if _fetching:
 		return
@@ -99,6 +141,7 @@ func refresh() -> void:
 	last_status = "Fetching satellite data…"
 	_fetch_next()
 
+## Requests the next queued satellite, or finishes with [method _finish_fetch] when the queue is empty.
 func _fetch_next() -> void:
 	if _fetch_queue.is_empty():
 		_finish_fetch()
@@ -106,12 +149,21 @@ func _fetch_next() -> void:
 	var id: int = _fetch_queue.pop_front()
 	_request.request(URL_FORMAT % id)
 
+## Handles one finished download: counts it if the text parsed ([method _parse]), then goes on to the next
+## ([method _fetch_next]).
+##
+## [param result]: HTTPRequest result code.
+## [param code]: HTTP status (200 is success).
+## [param _headers]: response headers (unused).
+## [param body]: the downloaded TLE text.
 func _on_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	if result == HTTPRequest.RESULT_SUCCESS and code == 200:
 		if _parse(body.get_string_from_utf8()) > 0:
 			_fetch_ok += 1
 	_fetch_next()
 
+## Ends a refresh: if nothing was received it records the failure; otherwise it notes the time, writes all element
+## lines to [constant CACHE_PATH], and emits [signal updated].
 func _finish_fetch() -> void:
 	_fetching = false
 	if _fetch_ok == 0:
@@ -125,6 +177,8 @@ func _finish_fetch() -> void:
 	last_status = "OK (%d satellites)" % elements.size()
 	updated.emit()
 
+## Loads the saved element sets (if the file exists) at start-up, setting [member last_fetch_unix] from the file's
+## age.
 func _load_cache() -> void:
 	if not FileAccess.file_exists(CACHE_PATH):
 		return
@@ -132,7 +186,11 @@ func _load_cache() -> void:
 		last_fetch_unix = float(FileAccess.get_modified_time(CACHE_PATH))
 		last_status = "Cached (%d satellites)" % elements.size()
 
-## Parse three-line element sets and keep the ones in CATALOG. Returns how many were kept.
+## Parses three-line element sets (name line, line 1, line 2) and keeps those in [constant CATALOG], adding them to
+## [member elements] and [member _raw].
+##
+## [param text]: one or more TLE sets, as text.
+## Returns: how many satellites were kept. See [method _parse_elements].
 func _parse(text: String) -> int:
 	var wanted := {}
 	for entry in CATALOG:
@@ -158,6 +216,12 @@ func _parse(text: String) -> int:
 			i += 1
 	return found
 
+## Decodes one satellite's two TLE lines into orbital elements.
+##
+## [param l1]: TLE line 1 (epoch).
+## [param l2]: TLE line 2 (inclination, node, eccentricity, argument of perigee, mean anomaly, mean motion).
+## Returns: a Dictionary of elements ("epoch", "inc", "raan", "ecc", "argp", "ma", "n", "a"), or an empty one if the
+##   lines are too short or the motion is not positive.
 func _parse_elements(l1: String, l2: String) -> Dictionary:
 	if l1.length() < 32 or l2.length() < 63:
 		return {}
@@ -180,18 +244,30 @@ func _parse_elements(l1: String, l2: String) -> Dictionary:
 		"a": pow(MU / (n * n), 1.0 / 3.0),        # km
 	}
 
-## Greenwich mean sidereal time in radians.
+## Greenwich mean sidereal time: how far the Earth has turned relative to the stars, needed to turn an orbit's
+## inertial position into a longitude.
+##
+## [param unix]: Unix time in seconds (UTC).
+## Returns: the angle in radians.
 static func gmst(unix: float) -> float:
 	var jd := unix / 86400.0 + 2440587.5
 	return deg_to_rad(fposmod(280.46061837 + 360.98564736629 * (jd - 2451545.0), 360.0))
 
-## Altitude as text: "423 km", or "1.5 million km" for far-away satellites.
+## Writes an altitude for a satellite label.
+##
+## [param alt_km]: altitude in km.
+## Returns: text like "423 km", or "1.5 million km" for far-away satellites.
 static func format_altitude(alt_km: float) -> String:
 	if alt_km >= 100000.0:
 		return "%.1f million km" % (alt_km / 1000000.0)
 	return "%d km" % int(round(alt_km))
 
-## Latitude, longitude (degrees) and altitude (km) of satellite `id` at `unix`, or {} if unknown.
+## Where a satellite is at a moment, from a two-body orbit with the J2 correction (good to a few km up to a few tens
+## of km for days after the element set). L2 satellites are placed opposite the Sun instead.
+##
+## [param id]: NORAD id.
+## [param unix]: Unix time in seconds (UTC).
+## Returns: a Dictionary {"lat", "lon" (degrees), "alt_km"}, or an empty one if the satellite is unknown.
 func position_of(id: int, unix: float) -> Dictionary:
 	if L2_IDS.has(id):
 		var offset: Vector2 = L2_OFFSETS.get(id, Vector2.ZERO)
@@ -228,8 +304,13 @@ func position_of(id: int, unix: float) -> Dictionary:
 		"alt_km": r - EARTH_RADIUS_KM,
 	}
 
-## Every tracked satellite at `unix`: {id, label, lat, lon, alt_km, next_lat, next_lon} where next_* is the
-## position ten seconds later (used to point the satellite along its track).
+## Every tracked satellite's position at a moment, for drawing.
+##
+## [param unix]: Unix time in seconds (UTC).
+## Returns: an Array of Dictionaries {id, label, lat, lon, alt_km, next_lat, next_lon}. next_lat and next_lon are the
+##   position 10 seconds later, with the longitude continued past +-180 rather than wrapped, so the heading computed
+##   from the pair stays right when a satellite crosses the date line. Used by GlobeView `_update_satellites` and
+##   FlatView.
 func positions(unix: float) -> Array:
 	var out: Array = []
 	var tracked := tracked_ids()

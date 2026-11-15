@@ -8,9 +8,13 @@ HYG (astronexus/HYG-Database) is licensed CC BY-SA 4.0.
 """
 import csv, json, sys
 
+# The HYG database CSV to read (the first argument, or a default path).
 src = sys.argv[1] if len(sys.argv) > 1 else "ExternalData/hygdata_v41.csv"
+# How many stars to keep (the second argument, or 2000).
 count = int(sys.argv[2]) if len(sys.argv) > 2 else 2000
 
+# One (magnitude, right ascension, declination, color index, name, spectral type) tuple per usable star; sorted
+# brightest first (lowest magnitude), then cut to [count].
 rows = []
 with open(src, newline="", encoding="utf-8") as f:
     for r in csv.DictReader(f):
@@ -30,6 +34,7 @@ with open(src, newline="", encoding="utf-8") as f:
 
 rows.sort()
 rows = rows[:count]
+# The output rows, as described in the module docstring (numbers rounded to keep the file small).
 out = [[round(ra, 4), round(dec, 4), round(mag, 2), round(ci, 2), name, spect] for mag, ra, dec, ci, name, spect in rows]
 with open("data/bright_stars.json", "w") as f:
     json.dump(out, f, separators=(",", ":"))

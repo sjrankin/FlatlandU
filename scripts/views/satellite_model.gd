@@ -3,7 +3,13 @@ extends RefCounted
 ## The 3D satellite used on the globe and the flat maps: a pill-shaped body with two solar panels, and a small
 ## label (name and altitude) beside it. The pill lies along +X (the direction of travel), the panels along Z.
 
-## Returns {"holder": Node3D, "label": Label3D, "km": -1, "name": String}. The caller adds `holder` to a scene.
+## Builds one satellite: a metallic pill-shaped body with two blue solar panels, and a small billboarded label (name
+## and altitude) beside it. The pill lies along +X, the direction of travel, and the panels along Z. Used by GlobeView
+## and FlatStage.
+##
+## [param short_name]: the satellite's name for the label.
+## Returns: a Dictionary {"holder": Node3D (the caller adds it to a scene and positions it), "label": Label3D, "km":
+##   -1 (the altitude last written on the label), "name": the short name}.
 static func build(short_name: String) -> Dictionary:
 	var holder := Node3D.new()
 	var body_mat := StandardMaterial3D.new()

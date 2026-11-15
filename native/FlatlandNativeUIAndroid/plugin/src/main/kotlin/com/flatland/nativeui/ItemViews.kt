@@ -42,12 +42,33 @@ import androidx.compose.ui.unit.dp
 // One control per kind of item (the counterpart of ScreenRow in ScreenViews.swift). Pick-lists, numbers and
 // colours are in Controls.kt.
 
+/**
+ * List item colors with a transparent background, so the screen's own background shows through.
+ *
+ * @return the ListItemColors.
+ */
 @Composable
 fun clearColors() = ListItemDefaults.colors(containerColor = Color.Transparent)
 
+/**
+ * Makes a row tappable.
+ *
+ * @receiver the modifier.
+ * @param onClick what to do on a tap.
+ * @return the new modifier.
+ */
 fun Modifier.clickableRow(onClick: () -> Unit): Modifier = this.clickable(onClick = onClick)
 
 
+/**
+ * One control, chosen by the kind of item (the counterpart of ScreenRow in ScreenViews.swift): a heading, switch,
+ * choice, number, color, text field, action button, info row, paragraph or list row, followed by a divider (except
+ * after headings and paragraphs).
+ *
+ * @param model the screen's model.
+ * @param item the item to draw.
+ * @param navigate called with a route when the item opens another list (a long choice).
+ */
 @Composable
 fun ItemRow(model: ScreenModel, item: ScreenItem, navigate: (Route) -> Unit) {
     when (item.kind) {
@@ -85,6 +106,11 @@ fun ItemRow(model: ScreenModel, item: ScreenItem, navigate: (Route) -> Unit) {
     if (item.kind != ItemKind.Section && item.kind != ItemKind.Paragraph) HorizontalDivider()
 }
 
+/**
+ * A label and a read-only value; a long value (a URL, a status) wraps under its heading.
+ *
+ * @param item the "info" item.
+ */
 @Composable
 private fun InfoRow(item: ScreenItem) {
     if (item.detail.length > 28) {   // long values (a URL, a status) wrap under their heading
@@ -102,6 +128,11 @@ private fun InfoRow(item: ScreenItem) {
     }
 }
 
+/**
+ * A block of text in the style "title", "headline", "caption", "mono" or the default.
+ *
+ * @param item the "paragraph" item.
+ */
 @Composable
 private fun ParagraphText(item: ScreenItem) {
     val pad = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
@@ -119,6 +150,13 @@ private fun ParagraphText(item: ScreenItem) {
     }
 }
 
+/**
+ * A button: prominent (filled), destructive (red) or tonal. If the item has a confirm question, a dialog asks it
+ * first (with Cancel).
+ *
+ * @param model the screen's model.
+ * @param item the "action" item.
+ */
 @Composable
 private fun ActionButton(model: ScreenModel, item: ScreenItem) {
     var confirming by remember { mutableStateOf(false) }
@@ -144,8 +182,13 @@ private fun ActionButton(model: ScreenModel, item: ScreenItem) {
     }
 }
 
-/** A list row: optional leading text (a magnitude), title and subtitle, detail on the right, and either a
- *  check box bound to a key or a tap that sends the row's id. */
+/**
+ * A list row: optional leading text (a magnitude), title and subtitle, detail on the right, and either a check box
+ * bound to a key or a tap that sends the row's id. A selected row shows a tick; a dimmed one is faded.
+ *
+ * @param model the screen's model.
+ * @param item the "row" item.
+ */
 @Composable
 private fun ListRow(model: ScreenModel, item: ScreenItem) {
     val accent = if (item.accent.isEmpty()) MaterialTheme.colorScheme.onSurface else parseHex(item.accent)

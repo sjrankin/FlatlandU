@@ -2,12 +2,19 @@ extends PanelContainer
 ## The status bar along the bottom of the main view (Flatland's StatusBar2D): a dark
 ## rounded bar with a navy border that shows transient messages such as new earthquakes.
 
+## The Label that shows the current message.
 var _label: Label
+## Messages waiting their turn, each [text, seconds]; filled by [method post].
 var _queue: Array = []
+## One-shot timer that ends the current message and calls [method _next].
 var _timer: Timer
+## The pushed (standing) message set by [method push], shown whenever nothing else is.
 var _pushed := ""
+## `Time.get_ticks_msec()` when the pushed message expires.
 var _pushed_until_msec := 0
 
+## Builds the bar: a dark rounded panel with a navy border and one label (two wrapped lines on phones, one clipped
+## line on a desktop), the message timer, and visibility that follows the `show_status_bar` setting.
 func _ready() -> void:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0, 0, 0, 0.7)
@@ -39,27 +46,42 @@ func _ready() -> void:
 		if k == "show_status_bar":
 			visible = bool(v))
 
-## Show `text` for `seconds`, queuing behind any message already showing.
+## Shows a message for a while, queuing behind any message already showing.
+##
+## [param text]: the message.
+## [param seconds]: how long to show it (default 6).
 func post(text: String, seconds: float = 6.0) -> void:
 	_queue.append([text, seconds])
 	if _timer.is_stopped():
 		_next()
 
-## Keep `text` for `seconds` and show it whenever no other message is showing (Flatland's pushed message).
+## Sets a standing message (Flatland's "pushed" message) that appears whenever no posted message is showing, until it
+## expires.
+##
+## [param text]: the message.
+## [param seconds]: how long it stays eligible.
 func push(text: String, seconds: float) -> void:
 	_pushed = text
 	_pushed_until_msec = Time.get_ticks_msec() + int(seconds * 1000.0)
 	if _timer.is_stopped():
 		_next()
 
+## Whether the pushed message is set and not yet expired.
+##
+## Returns: true if it should be shown.
 func _pushed_active() -> bool:
 	return _pushed != "" and Time.get_ticks_msec() < _pushed_until_msec
 
-## Replace whatever is showing (used for the live mouse coordinates).
+## Replaces what is showing with live text (used for the mouse coordinates). Ignored while a posted or pushed message
+## is showing.
+##
+## [param text]: the text.
 func show_persistent(text: String) -> void:
 	if _timer.is_stopped() and not _pushed_active():
 		_label.text = text
 
+## Moves on after a message: shows the next queued message (and starts the timer for it), or the pushed message if it
+## is still active, or clears the bar.
 func _next() -> void:
 	if _queue.is_empty():
 		_label.text = _pushed if _pushed_active() else ""

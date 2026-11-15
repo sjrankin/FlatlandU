@@ -1,10 +1,14 @@
 extends Window
 ## Today's sunrise, solar noon and sunset for the home location or any city (Flatland's Today view).
 
+## Drop-down of places: Home first, then every city by name.
 var _city_opt: OptionButton
+## Two-column grid of heading and value labels.
 var _grid: GridContainer
+## The cities in the drop-down, sorted by name; item id n (n > 0) is `_cities[n - 1]`.
 var _cities: Array = []
 
+## Builds the window: the place chooser, the grid of times and a Close button. Refreshes each time it opens.
 func _ready() -> void:
 	title = "Today's Times"
 	size = Vector2i(520, 420)
@@ -40,10 +44,20 @@ func _ready() -> void:
 	about_to_popup.connect(update_times)
 	update_times()
 
+## Formats a time of day.
+##
+## [param unix]: a Unix time (UTC).
+## [param tz_hours]: hours to add (a time zone offset, 0 for UTC).
+## Returns: "HH:MM".
 func _fmt(unix: float, tz_hours: float) -> String:
 	var d := Time.get_time_dict_from_unix_time(int(unix + tz_hours * 3600.0))
 	return "%02d:%02d" % [d["hour"], d["minute"]]
 
+## The rows of the table for the chosen place: location, nominal time zone, sunrise, solar noon and sunset (UTC and
+## local solar time), length of day or a note for polar day/night, and whether the Sun is up now. Shared by the Godot
+## and native screens. Uses [method Solar.sunrise_sunset].
+##
+## Returns: an Array of [heading, value] text pairs.
 func _rows() -> Array:
 	var lat := Settings.get_float("home_latitude")
 	var lon := Settings.get_float("home_longitude")
@@ -68,6 +82,7 @@ func _rows() -> Array:
 	rows.append(["Sun now", "Above the horizon" if Solar.is_daylight(lat, lon, now) else "Below the horizon"])
 	return rows
 
+## Rebuilds the grid from [method _rows] and tells NativeUI the data changed.
 func update_times() -> void:
 	NativeUI.refresh(self)
 	for c in _grid.get_children():
@@ -89,6 +104,9 @@ func update_times() -> void:
 
 # MARK: - Native (SwiftUI) version; see NativeUI
 
+## Describes this dialog for the native UI: a City choice, then an info row per [method _rows] entry.
+##
+## Returns: {"screen": ..., "values": {"city": id}}.
 func native_screen() -> Dictionary:
 	var options: Array = []
 	for i in range(_city_opt.item_count):
@@ -100,6 +118,11 @@ func native_screen() -> Dictionary:
 	return {"screen": {"title": "Today's Times", "pages": [{"title": "Times", "items": items}]},
 		"values": {"city": _city_opt.get_selected_id()}}
 
+## Handles native events: choosing a city selects it and updates the times.
+##
+## [param kind]: "value", "action" or "closed".
+## [param key]: the control key ("city").
+## [param value]: the chosen item id.
 func native_event(kind: String, key: String, value: Variant) -> void:
 	if kind == "value" and key == "city":
 		_city_opt.select(_city_opt.get_item_index(int(value)))

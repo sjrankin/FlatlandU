@@ -2,26 +2,51 @@ extends Node
 ## Earthquake retrieval (autoload "QuakeService"). Counterpart of Flatland's RemoteData/USGS.
 ## Fetches the USGS GeoJSON feed on a timer, keeps the latest list, and reports new quakes.
 
+## Emitted after every successful fetch, and with an empty list when earthquakes are switched off.
+##
+## [param quakes]: the quakes to show, as from [method visible_quakes].
 signal quakes_updated(quakes: Array)
+## Emitted for each quake that is new since the last fetch (never on the first load). Used for the new-quake sound.
+##
+## [param quake]: the quake Dictionary.
 signal new_quake(quake: Dictionary)
-## The biggest of the quakes that arrived in the latest update, including the first load (Flatland's
-## "New quake" status message).
+## Emitted once per fetch with the biggest of the quakes that arrived that time, including the first load (it becomes
+## Flatland's "New quake" status message).
+##
+## [param quake]: the quake Dictionary.
 signal biggest_new_quake(quake: Dictionary)
+## Emitted when a request to the USGS feed begins (the Live Data dialog shows it).
 signal fetch_started
+## Emitted when a request fails or the data is unusable.
+##
+## [param reason]: a short description, also kept in [member last_status].
 signal fetch_failed(reason: String)
 
+## The USGS GeoJSON summary feed: magnitude 4.5 and above for the past week.
 const FEED_URL := "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_week.geojson"
 
-var quakes: Array = []               # newest first: {id, magnitude, place, time (unix s), lat, lon, depth}
+## All quakes from the latest fetch, newest first. Each is a Dictionary: "id", "magnitude", "place", "time" (Unix
+## seconds), "lat", "lon", "depth" (km) and "url". The user's filters are applied by [method visible_quakes].
+var quakes: Array = []
+## When the last successful fetch finished (Unix seconds); 0 before the first.
 var last_fetch_unix: float = 0.0
+## Text about the latest fetch for the Live Data dialog ("Retrieving", "OK (n quakes)", an error...).
 var last_status: String = "Not yet retrieved"
+## How many fetches have succeeded this run.
 var fetch_count: int = 0
 
+## The HTTPRequest node that downloads the feed.
 var _http: HTTPRequest
+## Repeating timer that calls [method refresh]; its interval is the "quake_fetch_interval" setting (at least 15 s).
 var _timer: Timer
+## Ids of quakes already seen, so only real newcomers are announced ([signal new_quake]).
 var _known: Dictionary = {}
+## True until the first fetch has been processed; the first load announces the biggest quake but no individual new
+## ones.
 var _first_load := true
 
+## Creates the HTTP request and the timer, listens for setting changes and, if earthquakes are enabled, starts
+## fetching.
 func _ready() -> void:
 	_http = HTTPRequest.new()
 	_http.timeout = 30.0
@@ -37,6 +62,11 @@ func _ready() -> void:
 		_timer.start()
 		refresh.call_deferred()
 
+## Reacts to settings: turning earthquakes on starts the timer and fetches; turning them off stops it and sends an
+## empty list; changing the interval updates the timer.
+##
+## [param key]: the setting's key.
+## [param _v]: the new value (unused).
 func _on_setting_changed(key: String, _v: Variant) -> void:
 	if key == "enable_earthquakes":
 		if Settings.get_bool("enable_earthquakes"):
@@ -48,6 +78,8 @@ func _on_setting_changed(key: String, _v: Variant) -> void:
 	elif key == "quake_fetch_interval":
 		_timer.wait_time = maxf(15.0, Settings.get_float("quake_fetch_interval"))
 
+## Fetches the feed now (the timer also calls this). Does nothing if a request is already running. Emits
+## [signal fetch_started]; the result arrives in [method _on_completed].
 func refresh() -> void:
 	if _http.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
 		return
@@ -58,6 +90,14 @@ func refresh() -> void:
 		last_status = "Request failed (%d)" % err
 		fetch_failed.emit(last_status)
 
+## Handles a finished request: checks it, parses the GeoJSON into [member quakes] (newest first), works out which
+## quakes are new, updates the status and emits [signal quakes_updated], [signal biggest_new_quake] and
+## [signal new_quake].
+##
+## [param result]: the HTTPRequest result code.
+## [param code]: the HTTP status (200 is success).
+## [param _headers]: response headers (unused).
+## [param body]: the downloaded JSON bytes.
 func _on_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
 		last_status = "Failed (result %d, HTTP %d)" % [result, code]
@@ -102,9 +142,11 @@ func _on_completed(result: int, code: int, _headers: PackedStringArray, body: Pa
 	for q in arrivals:
 		new_quake.emit(q)
 
-## Quakes after the user's filters. If the user has enabled earthquake regions, a quake is shown
-## when it lies in a region and meets that region's magnitude and age limits; otherwise the
-## global magnitude/age filter applies.
+## The quakes to show after the user's filters. If earthquake regions are enabled, a quake is shown when it lies in
+## one and meets that region's limits ([method region_matches]); otherwise the global minimum magnitude and maximum
+## age apply.
+##
+## Returns: an Array of quake Dictionaries (a subset of [member quakes]).
 func visible_quakes() -> Array:
 	var now := Time.get_unix_time_from_system()
 	var regions: Array = []
@@ -126,6 +168,13 @@ func visible_quakes() -> Array:
 				break
 	return out
 
+## Whether a quake falls inside an earthquake region and within its magnitude and age limits. A region whose first
+## longitude is greater than its second crosses the antimeridian (180 degrees).
+##
+## [param r]: the region Dictionary ("lat1", "lat2", "lon1", "lon2", "min_mag", "max_mag", "max_age_days").
+## [param q]: the quake Dictionary.
+## [param now]: the current Unix time, for the age limit.
+## Returns: true if it matches.
 static func region_matches(r: Dictionary, q: Dictionary, now: float) -> bool:
 	if q["magnitude"] < float(r.get("min_mag", 0.0)) or q["magnitude"] > float(r.get("max_mag", 10.0)):
 		return false
@@ -141,6 +190,10 @@ static func region_matches(r: Dictionary, q: Dictionary, now: float) -> bool:
 		return q["lon"] >= lon1 and q["lon"] <= lon2
 	return q["lon"] >= lon1 or q["lon"] <= lon2   # crosses the antimeridian
 
+## The color for a quake of a given size, from pale yellow for small ones to red for the largest.
+##
+## [param m]: the magnitude.
+## Returns: the Color (9 and up red, 8 pink, 7 orange, 6 light orange, 5 yellow, below 5 pale yellow).
 static func magnitude_color(m: float) -> Color:
 	if m >= 9.0: return Color("#FF2400")
 	if m >= 8.0: return Color("#FF2F92")

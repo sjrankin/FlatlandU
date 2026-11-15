@@ -1,13 +1,21 @@
 extends Window
 ## Editor for user-defined locations (Flatland's "user POI" editor). Stored in user://user_locations.json.
 
+## The list of the user's locations (name, latitude, longitude).
 var _tree: Tree
+## Text box for the location's name.
 var _name: LineEdit
+## Number box for the latitude, -90 to 90 (steps of 0.0001 degrees).
 var _lat: SpinBox
+## Number box for the longitude, -180 to 180.
 var _lon: SpinBox
+## Text box for a description.
 var _desc: LineEdit
+## Color button for the location's marker color.
 var _color: ColorPickerButton
 
+## Builds the window: the list, the form (name, description, latitude, longitude, color) and the buttons Add, Update,
+## Delete, "Use Last Clicked Location" (from [member CityDB.last_clicked]), "Use Home" and Close.
 func _ready() -> void:
 	title = "My Locations"
 	size = Vector2i(720, 520)
@@ -66,6 +74,11 @@ func _ready() -> void:
 	about_to_popup.connect(populate)
 	populate()
 
+## Makes a coordinate number box.
+##
+## [param lo]: smallest value.
+## [param hi]: largest value.
+## Returns: the SpinBox (step 0.0001, expands to fill).
 func _spin(lo: float, hi: float) -> SpinBox:
 	var s := SpinBox.new()
 	s.min_value = lo
@@ -74,12 +87,18 @@ func _spin(lo: float, hi: float) -> SpinBox:
 	s.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return s
 
+## Adds a button to a row.
+##
+## [param bar]: the container to add to.
+## [param text]: the button's text.
+## [param cb]: the Callable to run when pressed.
 func _button(bar: Container, text: String, cb: Callable) -> void:
 	var b := Button.new()
 	b.text = text
 	b.pressed.connect(cb)
 	bar.add_child(b)
 
+## Refills the list from [member CityDB.user_pois] and tells NativeUI the data changed.
 func populate() -> void:
 	NativeUI.refresh(self)
 	_tree.clear()
@@ -92,10 +111,15 @@ func populate() -> void:
 		it.set_text(2, "%.4f" % p["Longitude"])
 		it.set_metadata(0, i)
 
+## Reads the form into a location.
+##
+## Returns: a Dictionary with "Name" (or "Location" if empty), "Latitude", "Longitude", "Description", "POIType" (1)
+##   and "Color".
 func _current() -> Dictionary:
 	return {"Name": _name.text if _name.text != "" else "Location", "Latitude": _lat.value, "Longitude": _lon.value,
 		"Description": _desc.text, "POIType": 1, "Color": "#" + _color.color.to_html(false)}
 
+## A location was selected: loads it into the form.
 func _on_selected() -> void:
 	var it := _tree.get_selected()
 	if it == null:
@@ -107,11 +131,14 @@ func _on_selected() -> void:
 	_lon.value = p["Longitude"]
 	_color.color = Color(str(p.get("Color", "#ee44cc")))
 
+## Adds the form's location to [member CityDB.user_pois], saves ([method CityDB.save_user_pois]) and refreshes the
+## list.
 func _on_add() -> void:
 	CityDB.user_pois.append(_current())
 	CityDB.save_user_pois()
 	populate()
 
+## Replaces the selected location with the form's contents and saves. Does nothing if none is selected.
 func _on_update() -> void:
 	var it := _tree.get_selected()
 	if it != null:
@@ -119,6 +146,7 @@ func _on_update() -> void:
 		CityDB.save_user_pois()
 		populate()
 
+## Deletes the selected location and saves. Does nothing if none is selected.
 func _on_delete() -> void:
 	var it := _tree.get_selected()
 	if it != null:
@@ -129,6 +157,11 @@ func _on_delete() -> void:
 # MARK: - Native (SwiftUI) version; see NativeUI
 # The native screen drives this dialog's own controls, so the list, the form and the saving stay in one place.
 
+## Describes the dialog for the native UI. The native screen drives this dialog's own controls, so the list, the form
+## and the saving stay in one place: a row per location, the form fields, and Add / Update Selected / Delete Selected
+## / Use Last Clicked Location / Use Home actions.
+##
+## Returns: {"screen": ..., "values": {"loc.*": ...}}.
 func native_screen() -> Dictionary:
 	var selected := -1
 	if _tree.get_selected() != null:
@@ -155,6 +188,12 @@ func native_screen() -> Dictionary:
 		"values": {"loc.name": _name.text, "loc.desc": _desc.text, "loc.lat": _lat.value, "loc.lon": _lon.value,
 			"loc.color": "#" + _color.color.to_html(false)}}
 
+## Handles native events: "loc.*" values are copied into the form's controls; a "loc:N" action selects location N; the
+## other actions run the matching buttons. The screen is refreshed afterwards.
+##
+## [param kind]: "value", "action" or "closed".
+## [param key]: the control or button id.
+## [param value]: the new value for "value" events.
 func native_event(kind: String, key: String, value: Variant) -> void:
 	if kind == "value":
 		match key:

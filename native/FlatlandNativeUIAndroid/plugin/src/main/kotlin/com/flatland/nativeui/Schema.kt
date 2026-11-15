@@ -7,7 +7,14 @@ import org.json.JSONObject
 // the JSON into plain Kotlin values; ScreenViews.kt draws them with Jetpack Compose. It reads the same JSON as
 // the iOS version (Schema.swift), so one description from Godot serves both.
 
-/** A setting's value as it travels over JSON: a String, a Double or a Boolean. */
+/**
+ * Reads a value from a JSON object as it travels between Godot and the native screen.
+ *
+ * @receiver the JSON object.
+ * @param name the field's name.
+ * @return a String, a Boolean or a Double (all JSON numbers become Double), or null if the field is missing, null or
+ *   another type.
+ */
 fun JSONObject.valueOrNull(name: String): Any? {
     if (!has(name) || isNull(name)) return null
     return when (val v = get(name)) {
@@ -17,12 +24,24 @@ fun JSONObject.valueOrNull(name: String): Any? {
     }
 }
 
+/**
+ * A value as text: a Double with no fraction is written without a decimal point.
+ *
+ * @param v a String, Double or Boolean (or null).
+ * @return the text; "" for null.
+ */
 fun valueText(v: Any?): String = when (v) {
     is Double -> if (v == Math.rint(v)) v.toLong().toString() else v.toString()
     is Boolean -> v.toString()
     else -> v?.toString() ?: ""
 }
 
+/**
+ * A value as a number: a String is parsed (0 if it is not a number) and a Boolean is 1 or 0.
+ *
+ * @param v a String, Double or Boolean (or null).
+ * @return the number.
+ */
 fun valueDouble(v: Any?): Double = when (v) {
     is Double -> v
     is Boolean -> if (v) 1.0 else 0.0
@@ -30,9 +49,20 @@ fun valueDouble(v: Any?): Double = when (v) {
     else -> 0.0
 }
 
+/**
+ * A value as a Boolean: a Boolean as itself, anything else true when it is not zero.
+ *
+ * @param v a String, Double or Boolean (or null).
+ * @return the Boolean.
+ */
 fun valueBool(v: Any?): Boolean = if (v is Boolean) v else valueDouble(v) != 0.0
 
-/** The JSON text of a value, a bare scalar (what Godot's JSON parser expects). */
+/**
+ * The JSON text of a value, a bare scalar (what Godot's JSON parser expects).
+ *
+ * @param v a String, Double or Boolean (or null).
+ * @return the JSON text; "null" for anything else.
+ */
 fun valueJson(v: Any?): String = when (v) {
     is String -> JSONObject.quote(v)
     is Double -> if (v == Math.rint(v) && Math.abs(v) < 1e15) v.toLong().toString() else v.toString()
@@ -40,8 +70,24 @@ fun valueJson(v: Any?): String = when (v) {
     else -> "null"
 }
 
+/**
+ * The kinds of item a screen can contain; the same as the JSON "type" field (see Schema.swift for the iOS version).
+ * The iOS and macOS screens also support "image" and "link" items; the Android plug-in does not yet, so it ignores
+ * them (see [parse]).
+ */
 enum class ItemKind { Section, Toggle, Choice, Number, Color, Text, Action, Info, Paragraph, Row;
+    /**
+     * Holds [parse].
+     */
     companion object {
+        /**
+         * The kind for a JSON "type" name.
+         *
+         * @param name the "type" text ("section", "toggle", "choice", "number", "color", "text", "action", "info",
+         *   "paragraph" or "row").
+         * @return the kind, or null for a name the Android screen does not know (including the "image" and "link"
+         *   kinds the iOS and macOS screens have).
+         */
         fun parse(name: String): ItemKind? = when (name) {
             "section" -> Section
             "toggle" -> Toggle
@@ -58,8 +104,39 @@ enum class ItemKind { Section, Toggle, Choice, Number, Color, Text, Action, Info
     }
 }
 
+/**
+ * One choice of a "choice" item.
+ *
+ * @property label the text shown.
+ * @property value the value stored when it is chosen.
+ * @property group the heading it is listed under in a long list ("" for none).
+ */
 data class ScreenOption(val label: String, val value: Any, val group: String)
 
+/**
+ * One item on a screen, described by the JSON Godot sent. Only the fields that apply to its [kind] are used.
+ *
+ * @property id stable across updates (position, kind, key and action id; for rows, the action id), so Compose keeps
+ *   scroll position and focus when Godot sends fresh content.
+ * @property kind what kind of item this is.
+ * @property key the key of the value this item edits.
+ * @property title the main text.
+ * @property options the choices of a "choice" item.
+ * @property minimum smallest value of a "number" item.
+ * @property maximum largest value of a "number" item.
+ * @property step step of a "number" item's buttons.
+ * @property suffix text after a number, such as " s".
+ * @property actionId the id sent to Godot when an action or row is tapped.
+ * @property detail info: the value shown; row: the text on the right.
+ * @property subtitle row: the second line.
+ * @property accent row: "#rrggbb" for the leading text.
+ * @property leading row: short text before the title (a magnitude, say).
+ * @property checkKey row: the key of a Boolean shown as a check box.
+ * @property style paragraph: "title", "headline", "caption" or "mono"; action: "destructive" or "prominent".
+ * @property selected row: highlighted as the current choice.
+ * @property dimmed row: drawn faded.
+ * @property confirm action: if not empty, this question is asked before the id is sent.
+ */
 data class ScreenItem(
     /** Stable across updates, so Compose keeps scroll position and focus when Godot sends fresh content. */
     val id: String,
@@ -83,15 +160,39 @@ data class ScreenItem(
     val confirm: String = "",
 )
 
+/**
+ * One page of a screen.
+ *
+ * @property title the page's title (shown in the list of pages).
+ * @property items its items, in order.
+ */
 data class ScreenPage(val title: String, val items: List<ScreenItem>)
 
+/**
+ * The description of a whole screen, turned from the JSON Godot sends into plain Kotlin values; ScreenViews.kt draws
+ * it.
+ *
+ * @property title the screen's title.
+ * @property pages the pages (one page is shown directly; several are listed).
+ * @property doneTitle the title of the Done button.
+ * @property rootItems items shown under the list of pages.
+ */
 data class ScreenSchema(
     val title: String = "",
     val pages: List<ScreenPage> = emptyList(),
     val doneTitle: String = "Done",
     val rootItems: List<ScreenItem> = emptyList(),
 ) {
+    /**
+     * Holds the JSON readers [parse], [items] and [values].
+     */
     companion object {
+        /**
+         * Reads a screen description.
+         *
+         * @param json the JSON text from Godot ("title", "done_title", "pages", "root_items").
+         * @return the schema; an empty one if the JSON cannot be read.
+         */
         fun parse(json: String): ScreenSchema = try {
             val root = JSONObject(json)
             val pages = root.optJSONArray("pages") ?: JSONArray()
@@ -108,6 +209,13 @@ data class ScreenSchema(
             ScreenSchema()
         }
 
+        /**
+         * Reads a list of item descriptions. Items with an unknown type are skipped; rows are identified by their
+         * action id, everything else by position, kind, key and action id.
+         *
+         * @param list the JSON array, or null.
+         * @return the items.
+         */
         private fun items(list: JSONArray?): List<ScreenItem> {
             val out = ArrayList<ScreenItem>()
             if (list == null) return out
@@ -137,6 +245,13 @@ data class ScreenSchema(
             return out
         }
 
+        /**
+         * Reads the current values of a screen.
+         *
+         * @param json a JSON object text mapping keys to values.
+         * @return the values by key (those that are not text, number or Boolean are dropped); empty if the JSON
+         *   cannot be read.
+         */
         fun values(json: String): Map<String, Any> = try {
             val root = JSONObject(json)
             val out = HashMap<String, Any>()

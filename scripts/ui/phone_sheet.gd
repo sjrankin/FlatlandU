@@ -8,9 +8,19 @@ extends RefCounted
 ## right. Sheets slide up from the toolbar at the bottom of the screen and slide back down when closed.
 ## On desktop none of this applies.
 
+## Seconds a sheet takes to slide up from the toolbar.
 const SLIDE_IN := 0.28
+## Seconds a sheet takes to slide back down.
 const SLIDE_OUT := 0.22
 
+## Turns a desktop dialog Window into a phone sheet (does nothing on a desktop). Removes the title bar and minimum
+## size; rebuilds the dialog's VBoxContainer as title, scrolling content and a footer that keeps the dialog's own
+## button row on the left and adds one Close button on the right; hides the dialog's own Close/Done buttons; moves
+## status labels above the footer. Marks the window with the "phone_sheet" meta so main.gd's `_popup` slides it in. A
+## window may opt out of the scrolling with the "sheet_no_scroll" meta.
+##
+## [param w]: the dialog Window (laid out as Window > PanelContainer > VBoxContainer).
+## See also [method present], [method dismiss], [method _footer], [method _pad].
 static func wrap(w: Window) -> void:
 	if not Layout.is_phone():
 		return
@@ -74,6 +84,11 @@ static func wrap(w: Window) -> void:
 		vb.add_child(l)
 	vb.add_child(_footer(w, bar))
 
+## Builds the sheet's bottom row.
+##
+## [param w]: the sheet window (the Close button dismisses it).
+## [param bar]: the dialog's own button row to keep on the left, or null.
+## Returns: the footer container.
 static func _footer(w: Window, bar: Control) -> Control:
 	var footer := HBoxContainer.new()
 	if bar != null:
@@ -90,7 +105,11 @@ static func _footer(w: Window, bar: Control) -> Control:
 	footer.add_child(close)
 	return footer
 
-## Slide the sheet up from the bottom edge to `rect` and show it.
+## Slides a sheet up from the bottom edge and shows it.
+##
+## [param w]: the sheet window.
+## [param rect]: where it should end up (the free area of the screen).
+## [param from_y]: the y position it starts from (just above the toolbar).
 static func present(w: Window, rect: Rect2i, from_y: int) -> void:
 	if w.has_meta("sheet_tween"):
 		var old: Tween = w.get_meta("sheet_tween")
@@ -101,7 +120,9 @@ static func present(w: Window, rect: Rect2i, from_y: int) -> void:
 	w.set_meta("sheet_tween", tw)
 	tw.tween_property(w, "position:y", rect.position.y, SLIDE_IN).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
-## Slide the sheet back down to the bottom edge, then hide it.
+## Slides a sheet back down to the bottom edge, then hides it. Does nothing if it is already hidden.
+##
+## [param w]: the sheet window.
 static func dismiss(w: Window) -> void:
 	if not w.visible:
 		return
@@ -115,12 +136,17 @@ static func dismiss(w: Window) -> void:
 	tw.tween_property(w, "position:y", bottom, SLIDE_OUT).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	tw.tween_callback(w.hide)
 
-## A row of buttons: wraps onto more lines on a phone instead of running off the screen.
+## A container for a row of buttons: wraps onto more lines on a phone instead of running off the screen.
+##
+## Returns: an HFlowContainer on a phone, otherwise an HBoxContainer.
 static func button_bar() -> Container:
 	return HFlowContainer.new() if Layout.is_phone() else HBoxContainer.new()
 
-## Breathing room around the sheet's content: space at the edges and between the title, the content
-## and the footer, so nothing touches the screen edge.
+## Adds breathing room around a sheet's content: a margin on all sides and spacing between title, content and footer,
+## sized from the phone text size ([method PhoneTheme.text_px]). Wraps the VBoxContainer in a MarginContainer in its
+## place.
+##
+## [param vb]: the sheet's VBoxContainer.
 static func _pad(vb: VBoxContainer) -> void:
 	var fs := PhoneTheme.text_px()
 	var side := int(round(fs * 0.9))

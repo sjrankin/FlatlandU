@@ -1,15 +1,25 @@
 extends Window
 ## Debugger window (Flatland's debug panels): clock control, sun data, and runtime statistics.
 
+## Grid of label/value pairs on the Sun tab (refreshed twice a second).
 var _sun_grid: GridContainer
+## Grid of label/value pairs on the Performance tab.
 var _perf_grid: GridContainer
+## Number box for the year of the clock to set.
 var _year: SpinBox
+## Number box for the month.
 var _month: SpinBox
+## Number box for the day.
 var _day: SpinBox
+## Number box for the UTC hour.
 var _hour: SpinBox
+## Number box for the minute.
 var _minute: SpinBox
+## Half-second timer that calls [method _refresh].
 var _timer: Timer
 
+## Builds the window: Clock, Sun and Performance tabs, a "Show debug text grid" check box, a Close button, and the
+## refresh timer.
 func _ready() -> void:
 	title = "Flatland Debugger"
 	size = Vector2i(780, 440)
@@ -41,6 +51,10 @@ func _ready() -> void:
 	_timer.timeout.connect(_refresh)
 	add_child(_timer)
 
+## Builds the Clock tab: date and time boxes with Set Time and Back to Live, a speed chooser ([constant SPEEDS]) and
+## season presets ([constant PRESETS]). It changes [Solar]'s clock, which every view follows.
+##
+## [param tabs]: the TabContainer to add the page to.
 func _clock_tab(tabs: TabContainer) -> void:
 	var p := SettingControls.page(tabs, "Clock")
 	var l := Label.new()
@@ -90,6 +104,14 @@ func _clock_tab(tabs: TabContainer) -> void:
 		presets.add_child(b)
 	p.add_child(presets)
 
+## Adds a labeled whole-number box to a row.
+##
+## [param row]: the container to add to.
+## [param text]: the label.
+## [param lo]: smallest value.
+## [param hi]: largest value.
+## [param val]: starting value.
+## Returns: the SpinBox.
 func _spin(row: Container, text: String, lo: int, hi: int, val: int) -> SpinBox:
 	var l := Label.new()
 	l.text = text
@@ -101,15 +123,22 @@ func _spin(row: Container, text: String, lo: int, hi: int, val: int) -> SpinBox:
 	row.add_child(s)
 	return s
 
+## Sets the app's clock to the date and time in the boxes (keeping the current speed) and notifies the views with
+## [method _nudge].
 func _apply_time() -> void:
 	var unix := Time.get_unix_time_from_datetime_dict({"year": int(_year.value), "month": int(_month.value),
 		"day": int(_day.value), "hour": int(_hour.value), "minute": int(_minute.value), "second": 0})
 	Solar.set_clock(float(unix), Solar.time_scale)
 	_nudge()
 
+## Tells the views the clock was changed: it writes the current tick count to the `debug_time_tick` setting, whose
+## change signal makes GlobeView and others re-read the time.
 func _nudge() -> void:
 	Settings.set_value("debug_time_tick", int(Time.get_ticks_msec()))
 
+## Builds the Sun tab: an empty grid that [method _refresh] fills.
+##
+## [param tabs]: the TabContainer to add the page to.
 func _sun_tab(tabs: TabContainer) -> void:
 	var p := SettingControls.page(tabs, "Sun")
 	_sun_grid = GridContainer.new()
@@ -117,6 +146,9 @@ func _sun_tab(tabs: TabContainer) -> void:
 	_sun_grid.add_theme_constant_override("h_separation", 30)
 	p.add_child(_sun_grid)
 
+## Builds the Performance tab: an empty grid that [method _refresh] fills.
+##
+## [param tabs]: the TabContainer to add the page to.
 func _perf_tab(tabs: TabContainer) -> void:
 	var p := SettingControls.page(tabs, "Performance")
 	_perf_grid = GridContainer.new()
@@ -124,6 +156,10 @@ func _perf_tab(tabs: TabContainer) -> void:
 	_perf_grid.add_theme_constant_override("h_separation", 30)
 	p.add_child(_perf_grid)
 
+## Replaces the contents of a grid with heading/value labels.
+##
+## [param grid]: the GridContainer.
+## [param rows]: an Array of [heading, value] pairs.
 func _fill(grid: GridContainer, rows: Array) -> void:
 	for c in grid.get_children():
 		c.queue_free()
@@ -136,6 +172,10 @@ func _fill(grid: GridContainer, rows: Array) -> void:
 		grid.add_child(a)
 		grid.add_child(b)
 
+## The Sun tab's rows: simulated UTC, clock speed, declination, equation of time, sub-solar longitude and day
+## fraction, from [Solar].
+##
+## Returns: an Array of [heading, value] pairs.
 func _sun_rows() -> Array:
 	var now := Solar.now()
 	var d := Time.get_datetime_dict_from_unix_time(int(now))
@@ -148,6 +188,10 @@ func _sun_rows() -> Array:
 		["Day of year fraction", "%.4f" % Solar.day_fraction(now)],
 	]
 
+## The Performance tab's rows: frames per second, memory, object and node counts, draw calls, video memory, earthquake
+## counts and satellite map status.
+##
+## Returns: an Array of [heading, value] pairs.
 func _perf_rows() -> Array:
 	return [
 		["Frames per second", Engine.get_frames_per_second()],
@@ -160,6 +204,8 @@ func _perf_rows() -> Array:
 		["Satellite map", MapCatalog.satellite_status],
 	]
 
+## Called twice a second: refreshes the native screen if it is showing, otherwise refills both grids if the window is
+## visible.
 func _refresh() -> void:
 	if NativeUI.is_showing(self):
 		NativeUI.refresh(self)
@@ -171,16 +217,24 @@ func _refresh() -> void:
 
 # MARK: - Native (SwiftUI) version; see NativeUI
 
+## The clock speeds to choose from: [label, speed factor]. 1.0 is real time, 86400.0 runs a day each second.
 const SPEEDS := [["Real time", 1.0], ["60x (1 min/s)", 60.0], ["600x", 600.0], ["3600x (1 hour/s)", 3600.0], ["86400x (1 day/s)", 86400.0]]
+## Buttons that jump to a season: [label, month, day] for the equinoxes and solstices.
 const PRESETS := [["March equinox", 3, 20], ["June solstice", 6, 21], ["September equinox", 9, 22], ["December solstice", 12, 21]]
 
-## The clock fields being edited in the native screen (they are not Settings).
+## The clock fields being edited in the native screen ("dbg_year", "dbg_month", "dbg_day", "dbg_hour", "dbg_minute").
+## They are not Settings, so they are kept here until Set Time is pressed; emptied when the screen closes.
 var _nv: Dictionary = {}
 
+## Fills [member _nv] from the app's current clock, so the native screen starts with the time now showing.
 func _seed_native() -> void:
 	var d := Time.get_datetime_dict_from_unix_time(int(Solar.now()))
 	_nv = {"dbg_year": d["year"], "dbg_month": d["month"], "dbg_day": d["day"], "dbg_hour": d["hour"], "dbg_minute": d["minute"]}
 
+## Describes the dialog for the native UI: pages for Clock (with date/time fields, Set Time, Back to Live, speed,
+## presets and the debug grid toggle), Sun and Performance.
+##
+## Returns: {"screen": ..., "values": {...}}.
 func native_screen() -> Dictionary:
 	if _nv.is_empty():
 		_seed_native()
@@ -216,6 +270,12 @@ func native_screen() -> Dictionary:
 	return {"screen": {"title": "Flatland Debugger", "pages": [
 		{"title": "Clock", "items": clock}, {"title": "Sun", "items": sun}, {"title": "Performance", "items": perf}]}, "values": values}
 
+## Handles native events: "dbg_speed" changes the clock speed, other "dbg_*" values update [member _nv], other values
+## are stored as settings; actions run Set Time, Back to Live or a preset; "closed" clears [member _nv].
+##
+## [param kind]: "value", "action" or "closed".
+## [param key]: the control or button id.
+## [param value]: the new value for "value" events.
 func native_event(kind: String, key: String, value: Variant) -> void:
 	match kind:
 		"value":
@@ -242,6 +302,8 @@ func native_event(kind: String, key: String, value: Variant) -> void:
 		"closed":
 			_nv = {}
 
+## Sets the app's clock from the native screen's fields ([member _nv]), keeping the speed, notifies the views and
+## refreshes the screen.
 func _apply_native_time() -> void:
 	var unix := Time.get_unix_time_from_datetime_dict({"year": int(_nv["dbg_year"]), "month": int(_nv["dbg_month"]),
 		"day": int(_nv["dbg_day"]), "hour": int(_nv["dbg_hour"]), "minute": int(_nv["dbg_minute"]), "second": 0})

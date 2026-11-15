@@ -2,10 +2,16 @@ extends Window
 ## Satellites dialog: turn satellites on or off and choose which of the ten are tracked, all in one list. A
 ## tracked satellite shows its position right now; an unticked one is dimmed and is missing from every map.
 
+## The list of satellites (track box, name, NORAD id, latitude, longitude, altitude).
 var _tree: Tree
+## Text showing the orbit-data status ([member SatelliteService.last_status]).
 var _status: Label
-var _items: Dictionary = {}     # NORAD id -> TreeItem
+## The tree row of each catalogue satellite by NORAD id; rows are updated in place, never rebuilt, so a click is never
+## lost.
+var _items: Dictionary = {}
 
+## Builds the window: a "show satellites" check box, the list with a row per [constant SatelliteService.CATALOG]
+## entry, a status label, Refresh Data and Close buttons, and a 1-second timer that keeps the positions current.
 func _ready() -> void:
 	title = "Satellites"
 	size = Vector2i(680, 560)
@@ -69,15 +75,16 @@ func _ready() -> void:
 			_refresh_list())
 	_refresh_list()
 
-## The checkbox in the first column turns tracking of that satellite on or off.
+## A tick box in the first column changed: turns tracking of that satellite on or off with
+## [method SatelliteService.set_tracked].
 func _on_item_edited() -> void:
 	var item := _tree.get_edited()
 	if item == null or _tree.get_edited_column() != 0:
 		return
 	SatelliteService.set_tracked(int(item.get_metadata(0)), item.is_checked(0))
 
-## Update every row in place (the rows are never rebuilt, so a click is never lost): tracked satellites show
-## their position now, and untracked ones are dimmed and show none.
+## Updates every row in place: tracked satellites show their position now, untracked ones are dimmed and show none. If
+## the native screen is open, it is refreshed instead. Does nothing while hidden.
 func _refresh_list() -> void:
 	if NativeUI.is_showing(self):
 		NativeUI.refresh(self)
@@ -108,6 +115,10 @@ func _refresh_list() -> void:
 
 # MARK: - Native (SwiftUI) version; see NativeUI
 
+## Describes the dialog for the native UI: the "show satellites" toggle, a row per satellite (with a tick, NORAD id
+## and, if tracked, its position), the orbit data status and a Refresh Data button.
+##
+## Returns: {"screen": ..., "values": {"show_satellites": bool, "sat.<id>": bool}}.
 func native_screen() -> Dictionary:
 	var live := {}
 	for s in SatelliteService.positions(Solar.now()):
@@ -130,6 +141,12 @@ func native_screen() -> Dictionary:
 	items.append({"type": "action", "id": "refresh", "title": "Refresh Data", "style": "prominent"})
 	return {"screen": {"title": "Satellites", "pages": [{"title": "Satellites", "items": items}]}, "values": values}
 
+## Handles native events: the show toggle stores the setting; a "sat.<id>" tick changes tracking; "refresh" fetches
+## new orbit data.
+##
+## [param kind]: "value", "action" or "closed".
+## [param key]: the control or button id.
+## [param value]: the new value for "value" events.
 func native_event(kind: String, key: String, value: Variant) -> void:
 	if kind == "value":
 		if key == "show_satellites":

@@ -1,11 +1,18 @@
 extends Window
 ## Flatland's About view: a slowly turning globe, the title, version and credits.
 
+## The turning Earth node in the Godot About window's mini 3D scene ([method _build_globe]).
 var _earth: Node3D
+## Read-only text box with the Noto Sans license, shown by [method _toggle_licenses].
 var _licenses: TextEdit
+## The container of the 3D globe, hidden while the licenses show to make room.
 var _globe_box: SubViewportContainer
+## The "Show Licenses" / "Hide Licenses" button.
 var _licenses_button: Button
 
+## Builds the Godot About window (used where there is no native screen, such as Windows and Linux): a turning globe in
+## its own 3D world, the name, version, build and credits, a hidden license box and Show Licenses / Close buttons.
+## Follows the map setting and loads map textures as they arrive.
 func _ready() -> void:
 	title = "About Flatland"
 	size = Vector2i(620, 790)
@@ -69,15 +76,21 @@ func _ready() -> void:
 		if k == "map_type": _apply_map())
 	MapCatalog.texture_ready.connect(func(_f: String, _t: Texture2D) -> void: _apply_map())
 
-## Show or hide the full license text. The globe makes room for it, so the window keeps its size.
+## Shows or hides the full license text. The globe makes room for it, so the window keeps its size; the button's text
+## changes to match.
 func _toggle_licenses() -> void:
 	_licenses.visible = not _licenses.visible
 	_globe_box.visible = not _licenses.visible
 	_licenses.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_licenses_button.text = "Hide Licenses" if _licenses.visible else "Show Licenses"
 
+## The globe's material; its texture is the chosen map ([method _apply_map]).
 var _mat: StandardMaterial3D
 
+## Fills the About window's SubViewport with a small 3D scene: black sky, soft ambient light, a directional light, a
+## camera and a textured sphere under [member _earth].
+##
+## [param vp]: the SubViewport to build in.
 func _build_globe(vp: SubViewport) -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
@@ -111,6 +124,8 @@ func _build_globe(vp: SubViewport) -> void:
 	_earth.add_child(sphere)
 	_apply_map()
 
+## Puts the currently chosen map on the globe (the texture may arrive later, in which case this runs again from
+## [signal MapCatalog.texture_ready]).
 func _apply_map() -> void:
 	var m := MapCatalog.map_for(Settings.get_string("map_type"))
 	if m.is_empty():
@@ -119,19 +134,27 @@ func _apply_map() -> void:
 	if t != null:
 		_mat.albedo_texture = t
 
+## Turns the globe slowly (0.5 radians a second) while the window is visible.
+##
+## [param delta]: seconds since the last frame.
 func _process(delta: float) -> void:
 	if visible and _earth != null:
 		_earth.rotate_y(delta * 0.5)
 
 # MARK: - Native (SwiftUI) version; see NativeUI
 
-## Android's screen has no pages that open within it, so there the licenses replace the About screen, with a button back.
+## Android only: whether the licenses page is showing in place of the About screen (Android's screen has no pages that
+## open within it, so there are a Show Licenses button and a Back button).
 var _native_licenses := false
 
-## The picture at the top of the native About screen, as a file the native code can read (the project's own copy is inside the
-## app's package once exported). It is written again once each time the app starts, so a changed picture is picked up.
+## Where the About picture was written for the native code to read; empty until [method _about_image_path] first runs.
 static var _image_path := ""
 
+## Gives the native About screen a picture file it can open. The project's own copy
+## (`res://Assets/About/AboutImage.png`) is inside the exported app's package, so it is written once per run to the
+## user-data folder (decompressing it first if needed), which also picks up a changed picture.
+##
+## Returns: the file path of the PNG.
 func _about_image_path() -> String:
 	if _image_path == "":
 		var path := OS.get_user_data_dir().path_join("about_image.png")
@@ -142,6 +165,11 @@ func _about_image_path() -> String:
 		_image_path = path
 	return _image_path
 
+## Describes the About screen for the native UI (see [NativeUI]): the picture (not on Android), title, version, build,
+## credits, and the licenses, which on iOS and macOS open as a page inside the screen with a Back button (a "link"
+## item) and on Android replace the screen with a "Back to About" action.
+##
+## Returns: {"screen": ..., "values": {}}.
 func native_screen() -> Dictionary:
 	var licenses_text := "Noto Sans\n\n" + FileAccess.get_file_as_string("res://Assets/Fonts/NotoSans-OFL.txt")
 	var android := OS.get_name() == "Android"
@@ -170,6 +198,12 @@ func native_screen() -> Dictionary:
 		items.append({"type": "link", "title": "Show Licenses", "page_title": "Licenses", "detail": licenses_text})
 	return {"screen": {"title": "About Flatland", "pages": [{"title": "About", "items": items}]}, "values": {}}
 
+## Handles native screen events: the "licenses" and "about" actions (Android) switch between the two screens; "closed"
+## resets to the About screen.
+##
+## [param kind]: "value", "action" or "closed".
+## [param key]: the button id.
+## [param _value]: unused.
 func native_event(kind: String, key: String, _value: Variant) -> void:
 	if kind == "action":
 		_native_licenses = key == "licenses"

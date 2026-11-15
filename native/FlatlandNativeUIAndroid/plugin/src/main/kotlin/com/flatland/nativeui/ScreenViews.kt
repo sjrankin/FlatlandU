@@ -35,6 +35,12 @@ import androidx.compose.ui.platform.LocalContext
 
 // The Android counterpart of ScreenViews.swift: a screen described by Godot, drawn with Material 3.
 
+/**
+ * The Material 3 theme for the native screens: dynamic colors on Android 12 and later, otherwise the standard light
+ * or dark scheme, following the system setting.
+ *
+ * @param content the Compose content to theme.
+ */
 @Composable
 fun NativeTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
@@ -47,15 +53,31 @@ fun NativeTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = scheme, content = content)
 }
 
-/** Where the user is inside the screen: the list of pages, one page, or the list of options of a choice. */
+/**
+ * Where the user is inside the screen: the list of pages, one page, or the list of options of a choice. The routes
+ * form a back stack in [ScreenRoot].
+ */
 sealed interface Route {
+    /**
+     * One page of the screen.
+     *
+     * @property title the page's title.
+     */
     data class Page(val title: String) : Route
+    /**
+     * The list of options of a choice with many options.
+     *
+     * @property key the choice item's key.
+     */
     data class Choice(val key: String) : Route
 }
 
 /**
- * The top level. A screen with several pages shows a list of them (as the system Settings does); a screen with
- * one page shows that page directly. Back goes up one level, and out of the screen from the top.
+ * The top level of a screen. A screen with several pages shows a list of them (as the system Settings does); a screen
+ * with one page shows that page directly. Back goes up one level, and out of the screen from the top. There is a Done
+ * button.
+ *
+ * @param model the screen's model.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -99,6 +121,12 @@ fun ScreenRoot(model: ScreenModel) {
     }
 }
 
+/**
+ * The list of pages, followed by the root items.
+ *
+ * @param model the screen's model.
+ * @param navigate called with the route to open when a page is tapped.
+ */
 @Composable
 private fun PageList(model: ScreenModel, navigate: (Route) -> Unit) {
     LazyColumn {
@@ -115,7 +143,13 @@ private fun PageList(model: ScreenModel, navigate: (Route) -> Unit) {
     }
 }
 
-/** The items of one page; a section item is a heading for the ones after it. */
+/**
+ * The items of one page; a section item is a heading for the ones after it.
+ *
+ * @param model the screen's model.
+ * @param items the page's items.
+ * @param navigate called with a route when an item opens another list.
+ */
 @Composable
 fun ItemList(model: ScreenModel, items: List<ScreenItem>, navigate: (Route) -> Unit) {
     LazyColumn {

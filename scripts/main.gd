@@ -3,72 +3,136 @@ extends Control
 ## view, the time label, toolbar, status bar and all dialogs. The button bar and the dialogs are native (SwiftUI on iOS and
 ## macOS, Compose on Android; see NativeUI). Windows and Linux, which have no native code, use Godot's own.
 
+## Folder of the toolbar icon pictures.
 const ICON_DIR := "res://Assets/Icons/"
+## The version text shown in the debug text grid.
 const APP_VERSION := "1.0 (Godot)"
+## Height of Godot's own toolbar in points before scaling; see [method _toolbar_height].
 const TOOLBAR_HEIGHT := 60
 
-## Height of the toolbar (scaled up on phones).
+## Height of Godot's own toolbar, scaled up on phones.
+##
+## Returns: pixels.
 func _toolbar_height() -> int:
 	return int(TOOLBAR_HEIGHT * Layout.ui_scale())
 
-## The safe-area insets (camera cut-out, rounded corners, home indicator).
+## The safe-area insets (camera cut-out, rounded corners, home indicator); see [method Layout.safe_insets].
+##
+## Returns: a Vector4 (left, top, right, bottom) in pixels.
 func _insets() -> Vector4:
 	return Layout.safe_insets()
 
+## The area the views, clock, FPS label and status bar live in; shrunk to leave room for the toolbar.
 var _content: Control
+## Godot's own toolbar panel; null when the native bar is used.
 var _toolbar_bar: PanelContainer
+## Container that shows the 3D globe's viewport; gets the globe's mouse input.
 var _globe_container: SubViewportContainer
+## The SubViewport the globe is drawn in.
 var _globe_viewport: SubViewport
-## The globe view script, by path: its camera-mode enum is used here without a global class name.
+## The globe view script, loaded by path: its camera-mode enum is used here without a global class name (a global
+## class name was not found in the exported app, and nothing was drawn).
 const GlobeScript := preload("res://scripts/views/globe_view.gd")
 
+## The 3D globe ([GlobeScript]).
 var _globe: Node3D
+## The flat maps on a 3D plane ([FlatStage]).
 var _flat: FlatStage
+## The clock at the top ([TimeLabel] script).
 var _time_label: Label
+## The panel that shows the star tooltip beside the mouse pointer (macOS).
 var _star_tip: PanelContainer
+## The tooltip's text.
 var _star_tip_label: Label
+## Delay of 0.35 s before the tooltip appears.
 var _star_tip_timer: Timer
+## Where the mouse was when the tooltip text arrived.
 var _star_tip_pos := Vector2.ZERO
+## Godot toolbar's Welcome button (its icon shows whether the text is on); null with the native bar.
 var _welcome_button: Button
+## Godot toolbar's More button.
 var _more_button: Button
+## The menu the More button opens.
 var _more_menu: PopupMenu
+## The frame rate shown at the top right (the `show_fps` setting).
 var _fps_label: Label
+## Seconds since the frame rate text was last updated (twice a second).
 var _fps_accum := 0.0
+## The status bar ([StatusBar] script) at the bottom.
 var _status: PanelContainer
+## The container Godot's own toolbar buttons are added to.
 var _toolbar: Container
+## The toolbar panel's style, adjusted when it moves to the bottom.
 var _toolbar_style: StyleBoxFlat
+## The debug text grid in the lower left (version, build, uptime, memory).
 var _debug_grid: GridContainer
+## The value labels of the debug grid, by row name.
 var _debug_values: Dictionary = {}
+## View-type buttons by view name, from an older toolbar; no longer filled in, kept so [method _apply_view_type] can
+## update them if they exist.
 var _view_buttons: Dictionary = {}
+## Godot toolbar's Lock button (its icon shows the lock state).
 var _lock_button: Button
+## The Preferences dialog.
 var _prefs: Window
+## The About dialog.
 var _about: Window
+## The Today's Times dialog.
 var _times: Window
+## The earthquake list dialog.
 var _quake_list: Window
+## The Live Data Status dialog.
 var _live_status: Window
+## The My Locations dialog.
 var _locations: Window
+## The Earthquake Regions dialog.
 var _regions: Window
+## The Satellites dialog.
 var _satellites: Window
+## The Debugger dialog.
 var _debugger: Window
+## The background rectangle, in the `color_background` setting's color.
 var _bg: ColorRect
+## The file dialog that asks where to save a snapshot.
 var _snapshot_dialog: FileDialog
+## The file dialog that asks where to save a video.
 var _video_dialog: FileDialog
+## Godot toolbar's Record button (turns into a red Stop button while recording).
 var _video_button: Button
-var _recorder: Node                 # records the window to a movie (video_recorder.gd)
-var _snapshot_image: Image          # captured when the Snapshot button is pressed, saved when the dialog is confirmed
+## Records the window to a movie (video_recorder.gd).
+var _recorder: Node
+## The picture taken when the Snapshot button is pressed (before the dialog opens, so it shows the view at that
+## moment); saved when the dialog is confirmed.
+var _snapshot_image: Image
+## The popup that says what is at a clicked place.
 var _whats_here: PopupPanel
+## The popup's text.
 var _whats_here_label: RichTextLabel
+## `Time.get_ticks_msec()` at start, for the uptime in the debug grid.
 var _start_msec := Time.get_ticks_msec()
+## New-quake sounds already loaded, by file name.
 var _sounds: Dictionary = {}
+## Plays the new-quake sound.
 var _player: AudioStreamPlayer
+## The `--open=` development flag: which dialog to open at start-up (see [method _open_for_test]).
 var _open_on_start := ""
+## The `--fake-quakes` development flag: show made-up earthquakes (no network needed).
 var _fake_quakes := false
+## The `--resize=WxH` development flag: set the window to this size shortly after start.
 var _resize_to := ""
+## The `--native-snap=` development flag: save a picture of the native screen to this path, then quit.
 var _native_snap := ""
+## The `--cam=yaw,pitch,distance` development flag.
 var _cam_args := PackedFloat64Array()
+## The `--shot=` development flag: save a picture of the window here after 150 frames, then quit.
 var _shot_path := ""
+## Frames left before the `--shot=` picture is taken.
 var _shot_frames := 0
 
+## Builds the main window: reads the development flags, applies the phone theme, adds the background and content area,
+## builds the views, overlays, toolbar and dialogs, connects settings and earthquake events, then starts the "Please
+## Wait" cover ([method _begin_startup_wait]) and any development actions (recording test, camera vantage, dialog to
+## open, fake quakes). Also prints whether native UI is used.
 func _ready() -> void:
 	_parse_command_line()
 	set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -126,7 +190,10 @@ func _ready() -> void:
 	t.timeout.connect(_update_debug_grid)
 	add_child(t)
 
-## Development hooks: `-- --time=<unix>` shows another moment, `-- --view=<type>` starts in a view.
+## Reads the development flags after `--`: `--time=<unix>` shows another moment, `--view=`, `--map=`,
+## `--set=key=value`, `--fake-quakes`, `--shot=<file>`, `--cam=`, `--record=<file>`, `--vantage=`, `--resize=`,
+## `--open=`, `--native-snap=` and `--hours=`. Settings flags use [method Settings.override], so they are not saved.
+## See also [Layout] for `--phone`, `--ui-scale=` and `--safe=`.
 func _parse_command_line() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--time="):
@@ -162,6 +229,8 @@ func _parse_command_line() -> void:
 
 # MARK: - Construction
 
+## Builds the 3D globe (in a SubViewport inside a container that forwards the mouse to the globe) and the flat map
+## stage, and connects their hover, click, star tooltip, context menu and camera-mode signals.
 func _build_views() -> void:
 	_globe_container = SubViewportContainer.new()
 	_globe_container.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -192,8 +261,11 @@ func _build_views() -> void:
 	_flat.location_clicked.connect(_on_location_clicked)
 	_content.add_child(_flat)
 
-## Star tooltip: drawn by us (not Godot's built-in tooltip) so it can sit beside the mouse pointer
-## instead of under it.
+## Star tooltip: drawn here (not with Godot's built-in tooltip) so it can sit beside the mouse pointer instead of
+## under it. A star must stay under the mouse for 0.35 s before the tooltip shows.
+##
+## [param text]: the tooltip text, or "" to hide it.
+## [param pos]: the mouse position in pixels.
 func _on_star_tooltip(text: String, pos: Vector2) -> void:
 	_star_tip_timer.stop()
 	_star_tip.visible = false
@@ -203,6 +275,8 @@ func _on_star_tooltip(text: String, pos: Vector2) -> void:
 	_star_tip_pos = pos
 	_star_tip_timer.start()
 
+## Shows the tooltip below and to the right of the pointer (clear of the cursor image), flipping to stay inside the
+## view.
 func _show_star_tooltip() -> void:
 	_star_tip.reset_size()
 	_star_tip.visible = true
@@ -215,6 +289,8 @@ func _show_star_tooltip() -> void:
 		spot.y = _star_tip_pos.y - _star_tip.size.y - 12.0
 	_star_tip.position = spot.clamp(Vector2.ZERO, limit.max(Vector2.ZERO))
 
+## Builds the things drawn over the views: the star tooltip, the clock, the FPS label, the status bar, the debug text
+## grid and the What's Here popup.
 func _build_overlays() -> void:
 	_star_tip = PanelContainer.new()
 	_star_tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -302,8 +378,9 @@ func _build_overlays() -> void:
 	_whats_here.add_child(_whats_here_label)
 	_content.add_child(_whats_here)
 
-## There is no menu bar on any platform. Nearly everything the menus held is in the toolbar or Preferences; this one
-## "More" button holds the few commands that were only in the menus.
+## Builds the More button and its menu (Today's Times, My Locations, Earthquake Regions, Refresh Earthquakes). There
+## is no menu bar on any platform: nearly everything the menus held is in the toolbar or Preferences, and this holds
+## the few commands that were only in the menus.
 func _build_more_button() -> void:
 	var more := PopupMenu.new()
 	more.add_item("Today's Times…", 1)
@@ -319,20 +396,33 @@ func _build_more_button() -> void:
 
 # MARK: - Context menu
 
+## Context menu item id: Show Earth from Moon.
 const CTX_FROM_MOON := 1
+## Context menu item id: Show Earth from Sun.
 const CTX_FROM_SUN := 2
+## Context menu item id: View Moon from Earth.
 const CTX_MOON_FROM_EARTH := 3
+## Context menu item id: Reset View.
 const CTX_RESET := 4
+## Context menu item id: What's Here? (only offered when the click is on the Earth).
 const CTX_WHATS_HERE := 5
+## Context menu item id: Camera Flight.
 const CTX_FLIGHT := 6
 
+## The context menu for the 3D views; created on first use.
 var _context_menu: PopupMenu
+## The `--vantage=` development flag: moon, sun, lookmoon, flight or flightreset, to start in that camera mode.
 var _vantage := ""
+## The `--record=<file>` development flag: record 4 seconds to this file, then quit.
 var _record_test := ""
-var _context_point := Vector2.ZERO    ## where in the globe view the menu was asked for
+## Where in the globe view the menu was asked for (used by What's Here).
+var _context_point := Vector2.ZERO
 
-## The menu for the 3D views: right click on a desktop, a long press on a phone or tablet. Choosing outside it closes it.
-## The vantage points are not saved; they last until the camera is moved or the view is reset.
+## The globe asked for the context menu (right click, or a long press on a phone or tablet): shows it at that point.
+## Choosing outside it closes it. The camera modes are not saved; they last until the camera is moved or the view is
+## reset.
+##
+## [param at]: where in the globe view, in pixels.
 func _on_globe_context_requested(at: Vector2) -> void:
 	if _context_menu == null:
 		_context_menu = PopupMenu.new()
@@ -345,6 +435,9 @@ func _on_globe_context_requested(at: Vector2) -> void:
 	var screen := Vector2i(_globe_container.get_screen_position() + at)
 	_context_menu.popup(Rect2i(screen, Vector2i.ZERO))
 
+## Rebuilds the menu's items: Show Earth from Moon and from Sun and Camera Flight (with check marks for the active
+## mode), View Moon from Earth, Reset View, and What's Here? if the click was on the Earth. Called each time the menu
+## opens and when the camera mode changes.
 func _refresh_context_menu() -> void:
 	if _context_menu == null:
 		return
@@ -362,6 +455,10 @@ func _refresh_context_menu() -> void:
 		_context_menu.add_separator()
 		_context_menu.add_item("What's Here?", CTX_WHATS_HERE)
 
+## Runs the chosen menu item: choosing an active mode again turns it off (back to orbit); Reset View is the same as a
+## double click; What's Here? shows the place popup.
+##
+## [param id]: the item's id (a CTX_ constant).
 func _on_context_menu(id: int) -> void:
 	var mode: int = _globe.camera_mode()
 	match id:
@@ -382,9 +479,9 @@ func _on_context_menu(id: int) -> void:
 
 # MARK: - Start-up
 
-## Everything is built before anything moves: a "Please Wait" cover stays up until the first earthquake data has arrived and been
-## drawn (building the quakes and satellites takes a moment), and only then does the welcome text start. Without the cover the
-## welcome animation would run for a second and then stall while the rest was made.
+## Everything is built before anything moves: puts a "Please Wait…" cover over the window, which
+## [method _finish_startup] removes. Without the cover the welcome animation would run for a second and then stall
+## while the rest was made.
 func _begin_startup_wait() -> void:
 	var cover := ColorRect.new()
 	cover.color = Settings.get_color("color_background")
@@ -400,6 +497,10 @@ func _begin_startup_wait() -> void:
 	add_child(cover)
 	_finish_startup(cover)
 
+## Waits for the first earthquake data (up to 8 seconds, or until a fetch fails), plus four frames to draw it, then
+## removes the cover and starts the welcome text.
+##
+## [param cover]: the Please Wait cover to remove.
 func _finish_startup(cover: Control) -> void:
 	var state := {"arrived": true}      # a dictionary: a lambda gets its own copy of a plain variable
 	if Settings.get_bool("enable_earthquakes") and not _fake_quakes:
@@ -414,6 +515,9 @@ func _finish_startup(cover: Control) -> void:
 	cover.queue_free()
 	_globe.start_intro()
 
+## Runs a More-menu command.
+##
+## [param id]: 1 Today's Times, 2 My Locations, 3 Earthquake Regions, 4 Refresh Earthquakes.
 func _on_more_menu(id: int) -> void:
 	match id:
 		1: _action_times()
@@ -423,11 +527,22 @@ func _on_more_menu(id: int) -> void:
 			QuakeService.refresh()
 			_status.post("Refreshing earthquake data.", 4.0)
 
+## Updates the Welcome button's icon, and the native bar, when the welcome text appears or goes away.
+##
+## [param showing]: true while it is on screen.
 func _update_welcome_button(showing: bool) -> void:
 	if _welcome_button != null:      # the native bar draws its own icon
 		_welcome_button.icon = load(ICON_DIR + ("GlobeIconSelected" if showing else "GlobeIcon") + ".png")
 	NativeUI.refresh_toolbar()
 
+## Adds a button with an icon and a label to Godot's toolbar, sized for the platform (buttons share the row on a
+## phone).
+##
+## [param icon_name]: the icon file's name in [constant ICON_DIR], without ".png".
+## [param label]: the text under the icon.
+## [param tip]: the tooltip.
+## [param action]: the Callable run when pressed.
+## Returns: the Button.
 func _icon_button(icon_name: String, label: String, tip: String, action: Callable) -> Button:
 	var b := Button.new()
 	b.icon = load(ICON_DIR + icon_name + ".png")
@@ -458,9 +573,10 @@ func _icon_button(icon_name: String, label: String, tip: String, action: Callabl
 	_toolbar.add_child(b)
 	return b
 
-## The button bar. Where there is native code (iOS, macOS, Android) it is a native view along the bottom of the window and
-## Godot builds nothing; otherwise (Windows, Linux, or a build without the extension) it is built here, along the top
-## on a desktop and along the bottom on a phone.
+## Builds the button bar. Where there is native code (iOS, macOS, Android) it is a native view along the bottom of the
+## window and Godot builds nothing; if it has not come up after 3 seconds (its window could not be found), Godot's own
+## bar is used instead. Otherwise (Windows, Linux, or a build without the extension) Godot's bar is built, along the
+## top on a desktop and along the bottom on a phone.
 func _build_toolbar() -> void:
 	if NativeUI.toolbar_wanted() and NativeUI.show_toolbar(self):
 		_globe.intro_changed.connect(func(_showing: bool) -> void: NativeUI.refresh_toolbar())
@@ -474,6 +590,9 @@ func _build_toolbar() -> void:
 		return
 	_build_godot_toolbar()
 
+## Builds Godot's own toolbar: a panel with a scrolling row (a wrapping grid on phones) of buttons: About, Debugger,
+## Live Data, Preferences, Lock, Reset View, Snapshot, Record, Earthquakes, Welcome and More. The native bar
+## ([method native_toolbar]) lists the same commands.
 func _build_godot_toolbar() -> void:
 	_toolbar_bar = PanelContainer.new()
 	var sb := StyleBoxFlat.new()
@@ -520,6 +639,9 @@ func _build_godot_toolbar() -> void:
 	_update_welcome_button(_globe.is_intro_showing())
 	_place_toolbar()   # now that the buttons exist, size the bar to the rows they need
 
+## Creates the dialogs (Preferences, About, Today's Times, Earthquakes, Live Data, My Locations, Earthquake Regions,
+## Debugger, Satellites; each is wrapped as a full-screen sheet on phones), the snapshot and video file dialogs and
+## the video recorder, and connects their signals.
 func _build_dialogs() -> void:
 	_prefs = load("res://scripts/ui/prefs_dialog.gd").new()
 	_about = load("res://scripts/ui/about_dialog.gd").new()
@@ -559,6 +681,11 @@ func _build_dialogs() -> void:
 
 # MARK: - Actions (names follow Flatland's IBActions)
 
+## Shows a dialog the right way for the platform: its native screen if there is one ([method NativeUI.present]); a
+## full-screen sheet sliding up from the toolbar on phones; otherwise a centered window (enlarged on phones).
+##
+## [param w]: the dialog Window.
+## [param size_hint]: a size for the window, or Vector2i.ZERO to keep its own.
 func _popup(w: Window, size_hint: Vector2i = Vector2i.ZERO) -> void:
 	# The dialog's native screen (SwiftUI on iOS and macOS, Compose on Android), when the extension is there.
 	if NativeUI.wanted() and NativeUI.present(w):
@@ -580,24 +707,34 @@ func _popup(w: Window, size_hint: Vector2i = Vector2i.ZERO) -> void:
 		w.size = Vector2i(minf(w.size.x * s, area.x * 0.96), minf(w.size.y * s, area.y * 0.88))
 	w.popup_centered()
 
+## Opens Preferences.
 func _action_preferences() -> void: _popup(_prefs)
+## Opens About.
 func _action_about() -> void: _popup(_about)
+## Opens Today's Times.
 func _action_times() -> void: _popup(_times)
+## Opens the earthquake list.
 func _action_quake_list() -> void: _popup(_quake_list)
+## Opens Live Data Status.
 func _action_live_status() -> void: _popup(_live_status)
 
+## Opens Preferences on the Map page.
 func _action_select_map() -> void:
 	_popup(_prefs)
 	var tabs := _prefs.find_children("*", "TabContainer", true, false)
 	if tabs.size() > 0:
 		(tabs[0] as TabContainer).current_tab = 1
 
+## Resets the view: the flat stage's camera or the globe's (Reset View button, the R key and the context menu).
 func _action_reset_view() -> void:
 	if _flat.visible:
 		_flat.reset_view()
 	else:
 		_globe.reset_view()
 
+## The Snapshot button: grabs the picture now, before the dialog opens, so it shows the view at the moment of the
+## press (not whenever the file is saved, or with the dialog on top), then asks where to save it (starting in the last
+## folder used, or Pictures). See [method _save_snapshot].
 func _action_snapshot() -> void:
 	# Grab the picture now, before the dialog opens, so the snapshot shows the view at the moment
 	# of the button press rather than whenever the file is saved (or with the dialog on top).
@@ -612,7 +749,9 @@ func _action_snapshot() -> void:
 		_snapshot_dialog.current_dir = start_dir
 	_snapshot_dialog.popup_centered_ratio(0.6)
 
-## The Record button starts a recording (after asking where to save it) and stops the one in progress.
+## The Record button: stops the recording in progress, or starts a new one. On a desktop a Save dialog asks for the
+## file first (starting in the last video folder, or Movies); on a phone or tablet the movie goes straight to the
+## Movies folder (the app's own folder if there is none). See [method _start_video].
 func _action_video() -> void:
 	if _recorder.is_recording():
 		_recorder.stop()
@@ -633,6 +772,10 @@ func _action_video() -> void:
 		_video_dialog.current_dir = start_dir
 	_video_dialog.popup_centered_ratio(0.6)
 
+## Starts recording to a file, after the dialog has had three frames to close (so it is not in the first pictures).
+## Adds ".mov" if missing and remembers the folder.
+##
+## [param path]: the movie file's path.
 func _start_video(path: String) -> void:
 	if not path.to_lower().ends_with(".mov"):
 		path += ".mov"
@@ -643,12 +786,19 @@ func _start_video(path: String) -> void:
 	if _recorder.start(path):
 		_status.post("Recording… press Record again to stop.", 4.0)
 
+## Changes the Record button (and the native bar's) to a red "Stop" while recording and back afterwards.
+##
+## [param recording]: true while recording.
 func _update_video_button(recording: bool) -> void:
 	if _video_button != null:
 		_video_button.icon = load(ICON_DIR + ("VideoRecordingIcon" if recording else "VideoIcon") + ".png")
 		_video_button.text = "Stop" if recording else "Record"
 	NativeUI.refresh_toolbar()
 
+## Saves the snapshot taken by [method _action_snapshot] as a PNG, remembers the folder and reports the result in the
+## status bar.
+##
+## [param path]: the file path chosen in the Save dialog.
 func _save_snapshot(path: String) -> void:
 	if _snapshot_image != null and _snapshot_image.save_png(path) == OK:
 		Settings.set_value("snapshot_dir", path.get_base_dir())
@@ -659,11 +809,17 @@ func _save_snapshot(path: String) -> void:
 
 # MARK: - Touch pinch
 
-var _touches := {}          # finger index -> screen position, for the fingers currently down
-var _pinch_span := 0.0      # distance between the first two fingers at the last event
+## Fingers currently down: finger index to screen position.
+var _touches := {}
+## The distance between the first two fingers at the last event, to work out the pinch's change.
+var _pinch_span := 0.0
 
-## Godot only synthesizes pinch (magnify) gestures from a trackpad, not from a touch screen, so
-## pinch-to-zoom is worked out here from the raw touch events and sent to the visible view.
+## Two-finger pinch on a touch screen. Godot only makes pinch (magnify) gestures from a trackpad, so pinch-to-zoom is
+## worked out here from the raw touch events and sent to the visible view ([method GlobeView.pinch_zoom] or
+## [method FlatStage.pinch_zoom]); while two fingers are down both views are told so the emulated one-finger drag does
+## not also turn the globe.
+##
+## [param event]: the input event.
 func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
@@ -683,6 +839,9 @@ func _input(event: InputEvent) -> void:
 				view.pinch_zoom(span / _pinch_span)
 			_pinch_span = span
 
+## The distance between the first two fingers down.
+##
+## Returns: pixels, or 0 if fewer than two fingers are down.
 func _touch_span() -> float:
 	if _touches.size() < 2:
 		return 0.0
@@ -690,12 +849,20 @@ func _touch_span() -> float:
 	keys.sort()
 	return (_touches[keys[0]] as Vector2).distance_to(_touches[keys[1]])
 
+## Tells both views whether a pinch is in progress.
+##
+## [param on]: true while two or more fingers are down.
 func _pinching_view(on: bool) -> void:
 	_flat.set_pinching(on)
 	_globe.set_pinching(on)
 
 # MARK: - Events
 
+## Reacts to settings: changes the view type, updates the lock icon and native bar, shows or hides the debug grid and
+## sets the background color.
+##
+## [param key]: the setting's key.
+## [param _value]: its new value (read again from Settings).
 func _on_setting_changed(key: String, _value: Variant) -> void:
 	match key:
 		"view_type":
@@ -709,7 +876,9 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 		"color_background":
 			_bg.color = Settings.get_color("color_background")
 
-## Phones: how many toolbar buttons fit in one row of the current width.
+## Phones (Godot's own toolbar): how many buttons fit in one row of the current width; the widest button decides.
+##
+## Returns: the number of columns (at least 1).
 func _phone_toolbar_columns() -> int:
 	var ins := _insets()
 	var width := get_viewport_rect().size.x - ins.x - ins.z - 24.0
@@ -718,7 +887,10 @@ func _phone_toolbar_columns() -> int:
 		per_button = maxf(per_button, (b as Control).get_combined_minimum_size().x + 4.0 * Layout.ui_scale())
 	return clampi(int(floor(width / per_button)), 1, maxi(1, _toolbar.get_child_count()))
 
-## Phones: height of the toolbar, which is two (or more) rows when the buttons do not fit in one.
+## The toolbar's height: the native bar measures itself; Godot's grid is one row high, or more when the buttons do not
+## fit in one row.
+##
+## Returns: pixels.
 func _phone_toolbar_height() -> int:
 	if _native_toolbar_on():
 		return NativeUI.toolbar_height()   # the SwiftUI bar measures itself
@@ -729,16 +901,24 @@ func _phone_toolbar_height() -> int:
 	var rows := int(ceil(float(_toolbar.get_child_count()) / float(cols)))
 	return _toolbar_height() * maxi(rows, 1)
 
-## Is the button bar a native view (SwiftUI, Compose; see NativeUI) rather than Godot's own?
+## Whether the button bar is a native view (SwiftUI, Compose; see [NativeUI]) rather than Godot's own.
+##
+## Returns: true if native.
 func _native_toolbar_on() -> bool:
 	return NativeUI.toolbar_wanted()
 
-## The bar is along the bottom of the window on phones and wherever it is native (macOS too); Godot's own bar on Windows
-## and Linux stays along the top.
+## Whether the bar is along the bottom of the window: on phones and wherever it is native (macOS too). Godot's own bar
+## on Windows and Linux stays along the top.
+##
+## Returns: true for the bottom.
 func _toolbar_at_bottom() -> bool:
 	return Layout.is_phone() or OS.get_name() == "macOS"
 
-## The native bar's buttons (same commands as the Godot toolbar).
+## The native bar's buttons, the same commands as Godot's toolbar. NativeUI calls this
+## ([method NativeUI.show_toolbar]) and again whenever [method NativeUI.refresh_toolbar] is called.
+##
+## Returns: an Array of {id, title, symbol, selected?, menu?}; the Record button's title, symbol and selected state
+##   follow the recording, the Welcome button's state follows the welcome text, and the lock symbol follows the lock.
 func native_toolbar() -> Array:
 	return [
 		{"id": "about", "title": "About", "symbol": "info.circle"},
@@ -760,6 +940,9 @@ func native_toolbar() -> Array:
 			{"id": "refresh", "title": "Refresh Earthquakes"}]},
 	]
 
+## A native bar button was tapped: runs the same action as Godot's button of that name.
+##
+## [param id]: the button's or menu item's id.
 func native_toolbar_event(id: String) -> void:
 	match id:
 		"about": _action_about()
@@ -777,13 +960,13 @@ func native_toolbar_event(id: String) -> void:
 		"regions": _on_more_menu(3)
 		"refresh": _on_more_menu(4)
 
-## The native bar's height changed (first shown, or the phone was rotated): make room for it.
+## The native bar's height changed (first shown, or the phone was rotated): makes room for it.
 func native_toolbar_resized() -> void:
 	_place_toolbar()
 	_relayout()
 
-## Put the toolbar where it belongs: along the bottom (above the home indicator, with the views shifted up to make room)
-## on phones and for the native bar, along the top for Godot's own bar on a desktop.
+## Puts the toolbar where it belongs: along the bottom (above the home indicator, with the views shifted up to make
+## room) on phones and for the native bar, along the top for Godot's own bar on a desktop.
 func _place_toolbar() -> void:
 	var ins := _insets()
 	if _toolbar_at_bottom():
@@ -813,7 +996,8 @@ func _place_toolbar() -> void:
 		_toolbar_bar.offset_top = ins.y
 		_toolbar_bar.offset_bottom = ins.y + _toolbar_height()
 
-## Recompute the positions that depend on the safe-area insets (after the phone is rotated).
+## Recomputes the positions that depend on the safe-area insets (after a phone is rotated or the window changes size):
+## the toolbar, the FPS label and the status bar.
 func _relayout() -> void:
 	var ins := _insets()
 	_place_toolbar()
@@ -824,6 +1008,8 @@ func _relayout() -> void:
 	_status.offset_bottom = -bottom_gap
 	_status.offset_top = -bottom_gap - (2.0 * Layout.font(22, 0.85) * 1.5 + 36.0)
 
+## Shows the globe or the flat map for the `view_type` setting (the cube counts as the globe), updates any view
+## buttons and the lock icon, and keeps the clock at the top.
 func _apply_view_type() -> void:
 	var view := Settings.get_string("view_type")
 	var is_globe := view == Settings.VIEW_GLOBE or view == Settings.VIEW_CUBIC
@@ -841,6 +1027,12 @@ func _apply_view_type() -> void:
 	_time_label.offset_top = 8
 	_time_label.offset_bottom = 8 + 64 * maxf(1.0, Layout.ui_scale() * 0.7)
 
+## The mouse moved over a view: shows the coordinates, with the nearest city within 150 km, in the status bar (or
+## clears it when not over the map).
+##
+## [param lat]: latitude under the mouse.
+## [param lon]: longitude under the mouse.
+## [param over]: true if over the Earth or map.
 func _on_hover(lat: float, lon: float, over: bool) -> void:
 	if over:
 		var city := CityDB.find_nearest(lat, lon, 150.0)
@@ -851,6 +1043,11 @@ func _on_hover(lat: float, lon: float, over: bool) -> void:
 	else:
 		_status.show_persistent("")
 
+## What's Here: remembers the place ([member CityDB.last_clicked]) and pops up its coordinates, nearest city, solar
+## time, whether the Sun is up, and sunrise and sunset.
+##
+## [param lat]: latitude.
+## [param lon]: longitude.
 func _on_location_clicked(lat: float, lon: float) -> void:
 	CityDB.last_clicked = Vector2(lat, lon)
 	var now := Solar.now()
@@ -872,18 +1069,35 @@ func _on_location_clicked(lat: float, lon: float) -> void:
 	_whats_here.reset_size()
 	_whats_here.popup()
 
+## Formats a time of day.
+##
+## [param unix]: a Unix time.
+## Returns: "HH:MM" (UTC).
 func _hm(unix: float) -> String:
 	var d := Time.get_time_dict_from_unix_time(int(unix))
 	return "%02d:%02d" % [d["hour"], d["minute"]]
 
+## Local solar time at a longitude (corrected by the equation of time).
+##
+## [param lon]: longitude in degrees.
+## [param unix]: Unix time (UTC).
+## Returns: "HH:MM".
 func _solar_time(lon: float, unix: float) -> String:
 	var secs := fposmod(unix + lon * 240.0 + Solar.equation_of_time(unix) * 60.0, 86400.0)
 	return "%02d:%02d" % [int(secs / 3600.0), int(fposmod(secs, 3600.0) / 60.0)]
 
+## An earthquake was chosen in the list: turns the globe to it (when the globe is the view shown).
+##
+## [param lat]: its latitude.
+## [param lon]: its longitude.
 func _on_quake_chosen(lat: float, lon: float) -> void:
 	if _globe_container.visible:
 		_globe.look_at_location(lat, lon)
 
+## A new earthquake arrived: plays the new-quake sound (loaded on first use) if sounds are on and the quake meets the
+## minimum magnitude.
+##
+## [param q]: the quake Dictionary.
 func _on_new_quake(q: Dictionary) -> void:
 	if q["magnitude"] < Settings.get_float("quake_min_magnitude"):
 		return
@@ -895,13 +1109,16 @@ func _on_new_quake(q: Dictionary) -> void:
 			_player.stream = _sounds[file]
 			_player.play()
 
-## Like Flatland, the biggest new quake stays in the status bar (for ten minutes) whenever
-## nothing else is being shown.
+## Like Flatland, the biggest new quake stays in the status bar (for ten minutes) whenever nothing else is being
+## shown.
+##
+## [param q]: the quake Dictionary.
 func _on_biggest_new_quake(q: Dictionary) -> void:
 	var d := Time.get_datetime_dict_from_unix_time(int(q["time"]))
 	_status.push("New quake: M %.1f %s, %04d-%02d-%02d %02d:%02d:%02d GMT" % [q["magnitude"], q["place"],
 		d["year"], d["month"], d["day"], d["hour"], d["minute"], d["second"]], 600.0)
 
+## Updates the debug text grid (version, build, build date, uptime, memory) once a second while it is shown.
 func _update_debug_grid() -> void:
 	if not _debug_grid.visible:
 		return
@@ -912,6 +1129,10 @@ func _update_debug_grid() -> void:
 	_debug_values["Uptime"].text = "%d:%02d:%02d" % [up / 3600, (up % 3600) / 60, up % 60]
 	_debug_values["Memory Used"].text = "%.2f GB" % (OS.get_static_memory_usage() / 1073741824.0)
 
+## Keyboard shortcuts: 1 globe, 2 north-centered map, 3 south-centered map, 4 rectangular map, 5 cubic world, R reset
+## view.
+##
+## [param event]: the input event.
 func _unhandled_key_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		match (event as InputEventKey).keycode:
@@ -922,6 +1143,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			KEY_5: Settings.set_value("view_type", Settings.VIEW_CUBIC)
 			KEY_R: _action_reset_view()
 
+## Every frame: on the flat map, tells it how much room the clock and status bar take; updates the FPS label twice a
+## second; and handles the development flags (resize the window, save the `--shot=` picture and quit).
+##
+## [param delta]: seconds since the last frame.
 func _process(delta: float) -> void:
 	if _flat.visible:
 		# Tell the flat map how much room the clock (top) and the status bar (bottom) take, so it fills the rest.
@@ -942,6 +1167,8 @@ func _process(delta: float) -> void:
 			_shot_path = ""
 			get_tree().quit()
 
+## Development: replaces the real quake list with six made-up earthquakes (stopping the real fetch), for testing
+## without a network (`--fake-quakes`).
 func _inject_fake_quakes() -> void:
 	var now := Time.get_unix_time_from_system()
 	var list := [[3.0, 35.0, -118.0], [4.5, 38.0, 142.0], [5.5, -20.0, -70.0], [6.5, 10.0, 125.0], [7.5, 0.0, 0.0], [8.5, 60.0, -150.0]]
@@ -954,6 +1181,11 @@ func _inject_fake_quakes() -> void:
 	QuakeService.quakes = out
 	QuakeService.quakes_updated.emit(out)
 
+## Development: opens a named dialog (the `--open=` flag), and with `--native-snap=` saves a picture of the native
+## screen and quits.
+##
+## [param what]: "prefs", "home", "grid", "satellites", "map", "about", "times", "quakes", "live", "debug",
+##   "locations", "regions", "click" and so on.
 func _open_for_test(what: String) -> void:
 	match what:
 		"prefs": _action_preferences()

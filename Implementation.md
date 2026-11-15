@@ -322,3 +322,14 @@ the file is also edited on disk, the editor's copy can overwrite the file: check
 
 Git-ignored: `.godot/`, `*.import`, `ExternalData/`, `Maps/`, `FlatlandU Icons/`, the Swift and Gradle build
 folders under `native/`, `android/build/`. Do not commit files over 100 MB (GitHub refuses the push).
+
+## Code comments
+
+Every function, class, variable and constant carries a comment that says what it is for and what it does, with its parameters and return value and references to related code. Keep them in step with the code: change the comment in the same edit as the code.
+
+- **GDScript:** `##` doc comments above the declaration, using `[param name]`, `[method name]`, `[member name]`, `[constant NAME]` and `[signal name]`, with a `Returns:` line. Settings keys in `DEFAULTS` have a trailing `#` note each.
+- **Shaders (`shaders/*.gdshader`):** `//` comments above each uniform, varying and function.
+- **Swift (`native/FlatlandNativeUI`):** `///` documentation comments (`- Parameter x:` and `- Returns:`).
+- **Kotlin (`native/FlatlandNativeUIAndroid`):** KDoc `/** */` with `@param`, `@property` and `@return`.
+- **Python tools (`tools/*.py`):** docstrings, with `#` notes on module-level variables.
+

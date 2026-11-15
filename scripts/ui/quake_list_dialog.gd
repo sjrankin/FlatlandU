@@ -1,11 +1,19 @@
 extends Window
 ## Table of current earthquakes (Flatland's Earthquake Viewer).
 
+## Emitted when the user double-clicks a quake (or taps it on a phone), so main.gd can turn the globe to it.
+##
+## [param lat]: the quake's latitude.
+## [param lon]: the quake's longitude.
 signal quake_chosen(lat: float, lon: float)
 
+## The table of quakes (magnitude, location, time, depth, coordinates).
 var _tree: Tree
+## Text under the table: how many are shown and the feed status.
 var _status: Label
 
+## Builds the window: the table, a status label and Refresh and Close buttons; repopulates when quakes update and each
+## time it opens.
 func _ready() -> void:
 	title = "Earthquakes"
 	size = Vector2i(860, 480)
@@ -50,6 +58,8 @@ func _ready() -> void:
 	about_to_popup.connect(populate)
 	populate()
 
+## Refills the table from [method QuakeService.visible_quakes], coloring each magnitude with
+## [method QuakeService.magnitude_color], and updates the status text. Also tells NativeUI the data changed.
 func populate() -> void:
 	NativeUI.refresh(self)
 	_tree.clear()
@@ -67,6 +77,7 @@ func populate() -> void:
 		it.set_metadata(0, q)
 	_status.text = "%d earthquakes shown (%d in feed). %s" % [list.size(), QuakeService.quakes.size(), QuakeService.last_status]
 
+## A row was double-clicked: emits [signal quake_chosen] with its position.
 func _on_activated() -> void:
 	var it := _tree.get_selected()
 	if it != null:
@@ -75,8 +86,14 @@ func _on_activated() -> void:
 
 # MARK: - Native (SwiftUI) version; see NativeUI
 
-var _native_list: Array = []   # the quakes behind the rows currently shown, in order
+## The quakes behind the rows currently shown in the native screen, in order, so a tapped row id ("quake:N") can be
+## turned into a quake.
+var _native_list: Array = []
 
+## Describes the dialog for the native UI: one "row" per quake (magnitude, place, time and coordinates, depth), a
+## status paragraph and a Refresh button. Stores the list in [member _native_list].
+##
+## Returns: {"screen": ..., "values": {}}.
 func native_screen() -> Dictionary:
 	_native_list = QuakeService.visible_quakes()
 	var items: Array = []
@@ -92,6 +109,12 @@ func native_screen() -> Dictionary:
 	items.append({"type": "action", "id": "refresh", "title": "Refresh", "style": "prominent"})
 	return {"screen": {"title": "Earthquakes", "pages": [{"title": "Earthquakes", "items": items}]}, "values": {}}
 
+## Handles native events: "refresh" fetches new data; "quake:N" emits [signal quake_chosen] and closes the screen so
+## the globe, now pointing at the quake, can be seen.
+##
+## [param kind]: "value", "action" or "closed".
+## [param key]: the button or row id.
+## [param _value]: unused.
 func native_event(kind: String, key: String, _value: Variant) -> void:
 	if kind != "action":
 		return

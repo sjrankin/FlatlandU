@@ -3,9 +3,15 @@ extends SceneTree
 ## middle of a black square. Run (not headless, it needs a renderer):
 ##   godot --path . -s tools/render_splash.gd
 
+## Width and height of the splash image in pixels.
 const SIZE := 2048
-const SUN_RADIUS_PX := 260.0   # radius of the sun's disk in the image
+## Radius of the Sun's disk in the image, in pixels; the camera's field of view is chosen to give it.
+const SUN_RADIUS_PX := 260.0
 
+## Runs the whole tool (a SceneTree script, so this is its entry point): renders the Sun with the app's own sky shader
+## into an off-screen viewport, waits ten frames for it to draw, fades the picture to pure black toward the edges (the
+## Sun's glow is wide), saves it as `res://Assets/Splash.png` and quits. It needs a renderer, so do not run it
+## headless.
 func _init() -> void:
 	var vp := SubViewport.new()
 	vp.size = Vector2i(SIZE, SIZE)

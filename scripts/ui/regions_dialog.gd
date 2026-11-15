@@ -2,18 +2,27 @@ extends Window
 ## Editor for earthquake regions (Flatland's earthquake region editor). When any region is
 ## enabled, only earthquakes meeting a region's limits are shown. Stored in user://regions.json.
 
+## The list of regions (name, enabled, bounds, magnitude range).
 var _tree: Tree
+## The text box for the region's name.
 var _name: LineEdit
+## The number boxes for the [constant FIELDS], by key.
 var _spins: Dictionary = {}
+## The check box that enables or disables the region being edited.
 var _enabled: CheckBox
+## The color button for the region's color (the tint of its row).
 var _color: ColorPickerButton
 
-## Region fields: [key, label, minimum, maximum, default].
+## The numeric fields of a region: [key, label, minimum, maximum, default value]. The rectangle is given by two
+## corners, upper-left (lat1, lon1) and lower-right (lat2, lon2); a region with lon1 greater than lon2 crosses the
+## antimeridian (see [method QuakeService.region_matches]).
 const FIELDS := [["lat1", "Upper-left latitude", -90, 90, 60.0], ["lon1", "Upper-left longitude", -180, 180, -130.0],
 		["lat2", "Lower-right latitude", -90, 90, 20.0], ["lon2", "Lower-right longitude", -180, 180, -60.0],
 		["min_mag", "Minimum magnitude", 0, 10, 4.0], ["max_mag", "Maximum magnitude", 0, 10, 10.0],
 		["max_age_days", "Maximum age (days)", 0.1, 30, 7.0]]
 
+## Builds the window: an explanatory note, the list of regions, the name box, the number fields, the enabled box and
+## color button, and Add / Update / Delete / Close buttons.
 func _ready() -> void:
 	title = "Earthquake Regions"
 	size = Vector2i(760, 560)
@@ -79,6 +88,7 @@ func _ready() -> void:
 	about_to_popup.connect(populate)
 	populate()
 
+## Refills the list from [member CityDB.regions] and tells NativeUI the data changed.
 func populate() -> void:
 	NativeUI.refresh(self)
 	_tree.clear()
@@ -93,6 +103,9 @@ func populate() -> void:
 		it.set_custom_bg_color(0, Color(str(r.get("color", "#ffcc00"))).darkened(0.6))
 		it.set_metadata(0, i)
 
+## Reads the form into a region.
+##
+## Returns: a Dictionary with "name" (or "Region" if empty), "enabled", "color" and every field of [constant FIELDS].
 func _current() -> Dictionary:
 	var d := {"name": _name.text if _name.text != "" else "Region", "enabled": _enabled.button_pressed,
 		"color": "#" + _color.color.to_html(false)}
@@ -100,6 +113,7 @@ func _current() -> Dictionary:
 		d[k] = (_spins[k] as SpinBox).value
 	return d
 
+## A region was selected in the list: loads it into the form.
 func _on_selected() -> void:
 	var it := _tree.get_selected()
 	if it == null:
@@ -111,11 +125,13 @@ func _on_selected() -> void:
 	for k in _spins:
 		(_spins[k] as SpinBox).value = r[k]
 
+## Adds the form's region to [member CityDB.regions], saves ([method CityDB.save_regions]) and refreshes the list.
 func _on_add() -> void:
 	CityDB.regions.append(_current())
 	CityDB.save_regions()
 	populate()
 
+## Replaces the selected region with the form's contents and saves. Does nothing if none is selected.
 func _on_update() -> void:
 	var it := _tree.get_selected()
 	if it != null:
@@ -123,6 +139,7 @@ func _on_update() -> void:
 		CityDB.save_regions()
 		populate()
 
+## Deletes the selected region and saves. Does nothing if none is selected.
 func _on_delete() -> void:
 	var it := _tree.get_selected()
 	if it != null:
@@ -133,6 +150,11 @@ func _on_delete() -> void:
 # MARK: - Native (SwiftUI) version; see NativeUI
 # The native screen drives this dialog's own controls, so the list, the form and the saving stay in one place.
 
+## Describes the dialog for the native UI. The native screen drives this dialog's own controls, so the list, the form
+## and the saving stay in one place: a row per region, then fields (name, enabled, color, each number) and Add /
+## Update Selected / Delete Selected actions.
+##
+## Returns: {"screen": ..., "values": {"reg.*": ...}}.
 func native_screen() -> Dictionary:
 	var selected := -1
 	if _tree.get_selected() != null:
@@ -157,6 +179,12 @@ func native_screen() -> Dictionary:
 		{"type": "action", "id": "delete", "title": "Delete Selected", "style": "destructive"}])
 	return {"screen": {"title": "Earthquake Regions", "pages": [{"title": "Regions", "items": items}]}, "values": values}
 
+## Handles native events: "reg.*" values are copied into the form's controls; a "reg:N" action selects region N;
+## "add", "update" and "delete" run the matching buttons. The screen is refreshed afterwards.
+##
+## [param kind]: "value", "action" or "closed".
+## [param key]: the control or button id.
+## [param value]: the new value for "value" events.
 func native_event(kind: String, key: String, value: Variant) -> void:
 	if kind == "value":
 		if key == "reg.name":

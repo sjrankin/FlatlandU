@@ -7,11 +7,17 @@ extends RefCounted
 ## `--safe=top,bottom,left,right` sets the safe-area insets in pixels, so the phone layout can be checked
 ## in a normal window.
 
+## True when the `--phone` development flag was given: the app then behaves as on a phone. Set by [method _parse].
 static var _forced_phone := false
+## The scale from `--ui-scale=N`, or -1 when not given; overrides the computed scale in [method ui_scale].
 static var _forced_scale := -1.0
+## The insets from `--safe=top,bottom,left,right` as a PackedFloat64Array, or null when not given; used by [method safe_insets].
 static var _forced_safe: Variant = null
+## True once the command line has been read, so [method _parse] runs once.
 static var _parsed := false
 
+## Reads the development flags `--phone`, `--ui-scale=` and `--safe=` from the command line (after the `--`) into the
+## `_forced_*` variables. Every public function here calls it first, and it only does work the first time.
 static func _parse() -> void:
 	if _parsed:
 		return
@@ -26,16 +32,26 @@ static func _parse() -> void:
 			if p.size() == 4:
 				_forced_safe = p
 
-## True on iOS (or with the `--phone` development flag). iOS has no menu bar, so the app hides it there.
+## Whether this is iOS (or the `--phone` flag was given). iOS has no menu bar, so the app hides it there.
+##
+## Returns: true on iOS.
 static func is_ios() -> bool:
 	_parse()
 	return _forced_phone or OS.get_name() == "iOS"
 
+## Whether the phone/tablet layout should be used: iOS or Android (any "mobile" platform), or the `--phone` flag. Used
+## all over the UI to choose sizes, dialogs and gestures.
+##
+## Returns: true on a phone or tablet.
 static func is_phone() -> bool:
 	_parse()
 	return _forced_phone or OS.has_feature("mobile")
 
-## Multiplier for fonts and control sizes: 1 on desktop, about 2.4 on a 3x iPhone.
+## The multiplier for fonts and control sizes: 1 on a desktop, up to about 3.2 on a high-density phone. It is the
+## largest of three estimates (screen density, window size, platform scale) so a phone is never left at 1x if the
+## platform reports its scale as 1.
+##
+## Returns: the scale (1.0 to 3.2), or the `--ui-scale=` value if given. See [method font].
 static func ui_scale() -> float:
 	_parse()
 	if _forced_scale > 0.0:
@@ -50,7 +66,10 @@ static func ui_scale() -> float:
 	var from_scale := DisplayServer.screen_get_scale() * 0.8
 	return clampf(maxf(maxf(from_dpi, from_size), from_scale), 1.0, 3.2)
 
-## Space to keep clear on each side: x = left, y = top, z = right, w = bottom (pixels).
+## The space to keep clear of the screen's camera cut-out, rounded corners and home indicator.
+##
+## Returns: a Vector4 in pixels: x = left, y = top, z = right, w = bottom. All zero on a desktop. The `--safe=` flag
+##   overrides it for testing.
 static func safe_insets() -> Vector4:
 	_parse()
 	if _forced_safe != null:
@@ -68,7 +87,11 @@ static func safe_insets() -> Vector4:
 		maxf(0.0, window_size.x - safe.end.x),
 		maxf(0.0, window_size.y - safe.end.y))
 
-## A font size for phones: `base` scaled by the UI scale (times `bias`), or `base` unchanged on desktop.
+## A font size that is scaled up on phones and left alone on a desktop.
+##
+## [param base]: the size for a desktop.
+## [param bias]: an extra factor on phones only (default 1.0).
+## Returns: `base` on a desktop, otherwise `base` times [method ui_scale] times [param bias], rounded.
 static func font(base: int, bias: float = 1.0) -> int:
 	if not is_phone():
 		return base

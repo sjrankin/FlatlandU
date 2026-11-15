@@ -3,11 +3,19 @@
 
 shader_type canvas_item;
 
+// Which map this shades: 0 north-centered polar, 1 south-centered polar, 2 rectangular.
 uniform int mode = 0;
-uniform float sun_declination = 0.0;   // radians
-uniform float sun_longitude = 0.0;     // degrees (sub-solar longitude)
+// The Sun's declination in radians (set by FlatView `_update_night`).
+uniform float sun_declination = 0.0;
+// The sub-solar longitude in degrees.
+uniform float sun_longitude = 0.0;
+// How dark the night side is (the shading's opacity, from the `night_darkness` setting).
 uniform float night_alpha = 0.6;
 
+// fragment(): works out, for each pixel, the latitude and longitude it shows (by the map layout in [mode]) and
+// the Sun's height above the horizon there, then draws black with an opacity of [night_alpha] where the Sun is
+// below the horizon (-0.833 degrees, with a soft edge). Pixels outside the circle of a polar map are clear. This
+// reproduces Flatland's pre-rendered day/night masks analytically.
 void fragment() {
 	float lat;
 	float lon_rel;
