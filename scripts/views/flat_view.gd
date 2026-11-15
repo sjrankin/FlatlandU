@@ -42,6 +42,10 @@ var _sea_tex: Texture2D
 var _sea_file := ""
 ## The Sun picture for the south-centered and rectangular maps.
 var _sun_tex_up: Texture2D = load("res://Assets/Suns/Sun2Up.png")
+## The Dürer engraving of the Sun drawn at the sub-solar point on the flat maps.
+var _durer_sun_tex: Texture2D = load("res://Assets/Suns/DurerSunUp.png")
+## The Dürer engraving of the Moon drawn at the sub-lunar point on the flat maps (same size as the Sun's).
+var _durer_moon_tex: Texture2D = load("res://Assets/Moon/DurerMoon.png")
 ## The Sun picture for the north-centered map.
 var _sun_tex_down: Texture2D = load("res://Assets/Suns/Sun2Down.png")
 ## Seconds since the last once-a-second [method refresh].
@@ -300,28 +304,27 @@ func _draw() -> void:
 	_draw_satellites()
 	_draw_solar_lunar_points()
 
-## Draws the balls under the Sun (yellow) and Moon (blue) as discs with a glow, an outline and a highlight, sized from
-## [constant SolarLunarMarker.MAP_FRACTION]. Each one follows its own setting. Skipped in [member stage_mode]
-## (FlatStage draws them as 3D balls).
+## Width of the Dürer Sun and Moon pictures on the rectangular map, in ball radii (see [constant SolarLunarMarker.MAP_FRACTION]).
+const DURER_SIZE_IN_RADII := 4.0
+
+## Draws the Dürer Sun and Moon pictures at the sub-solar and sub-lunar points, both the same size, sized from
+## [constant SolarLunarMarker.MAP_FRACTION]. Each one follows its own setting. Shown on every flat map. Skipped in
+## [member stage_mode] (FlatStage draws them as flat 3D sprites).
 func _draw_solar_lunar_points() -> void:
 	if stage_mode:
 		return
 	var width := _map_radius() * 2.0 if _is_polar() else _rect_map().size.x
-	var r := width * SolarLunarMarker.MAP_FRACTION
+	var d := width * SolarLunarMarker.MAP_FRACTION * DURER_SIZE_IN_RADII
 	var now := Solar.now()
 	var entries := []
 	if SolarLunarMarker.sun_enabled():
-		entries.append([SolarLunarMarker.sun_point(now), SolarLunarMarker.SUN_COLOR])
+		entries.append([SolarLunarMarker.sun_point(now), _durer_sun_tex])
 	if SolarLunarMarker.moon_enabled():
-		entries.append([SolarLunarMarker.moon_point(now), SolarLunarMarker.MOON_COLOR])
+		entries.append([SolarLunarMarker.moon_point(now), _durer_moon_tex])
 	for entry in entries:
 		var at: Vector2 = entry[0]
-		var color: Color = entry[1]
 		var p := project(at.x, at.y)
-		draw_circle(p, r * 1.25, Color(color, 0.35))                       # a glow
-		draw_circle(p, r, color)
-		draw_arc(p, r, 0.0, TAU, 24, color.darkened(0.45), 1.5, true)
-		draw_circle(p + Vector2(-0.3, -0.35) * r, r * 0.35, Color(1, 1, 1, 0.75))   # the highlight
+		draw_texture_rect(entry[1], Rect2(p - Vector2(d, d) * 0.5, Vector2(d, d)), false)
 
 ## The opacity of the night shading, from the `night_darkness` setting (a little lighter than the table value).
 ##

@@ -171,8 +171,8 @@ Day/night in the flat views is now computed by a shader (same geometry as the pr
   from CelesTrak elements (two-body plus J2; L2 and geostationary handled specially), drawn as pill-and-panel models
   with altitude labels on the globe and on the flat maps. Choose them in Preferences > Map > Satellites.
 - **Flat maps in 3D**: the polar and rectangular maps are textures on a plane you can rotate and zoom, with a sun
-  floating above, shadows cast away from the sun, extruded hour labels, 3D city and earthquake shapes, and
-  satellites at one height over the map.
+  floating above, shadows cast away from the sun (only by objects in daylight; each object's shadow casting is switched off while the sun is down at its place), extruded hour labels, 3D city and earthquake shapes, and
+  satellites at one height over the map. On every flat map the sub-solar and sub-lunar points are the Dürer engravings (`Assets/Suns/DurerSunUp.png`, `Assets/Moon/DurerMoon.png`, drawn the same size); they lie flat on the map.
 - **Cubic world**: faces follow the globe's longitudes and are shaded by the sun (`shaders/cube.gdshader`).
 - **Preferences**: Show stars, Show FPS, 3D shadows, Show satellites, city and quake shapes, Power.
 - **Maps**: Simple and Simple Political Map 1 are embedded in `Assets/BuiltIn`; the larger sets in `Maps/` are git-ignored.

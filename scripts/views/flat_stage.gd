@@ -95,10 +95,10 @@ var _city_key := ""
 var _quake_items: Array = []
 ## A summary of the earthquake settings and ids; the shapes are rebuilt only when it changes.
 var _quake_key := ""
-## The ball under the Sun (see SolarLunarMarker); created on first use.
-var _sun_point: MeshInstance3D
-## The ball under the Moon.
-var _moon_point: MeshInstance3D
+## The Dürer engraving of the Sun, lying flat on the map at the sub-solar point; created on first use.
+var _sun_art: Sprite3D
+## The Dürer engraving of the Moon, lying flat on the map at the sub-lunar point, the same size as the Sun's.
+var _moon_art: Sprite3D
 ## Satellite models by NORAD id, as made by [method SatelliteModel.build].
 var _sat_items: Dictionary = {}
 ## Materials by color, so each color is made once ([method _color_material]).
@@ -235,6 +235,51 @@ func _plane_height() -> float:
 func _picture_to_world(p: Vector2) -> Vector3:
 	return Vector3((p.x / _picture_size.x - 0.5) * PLANE_WIDTH, 0.0, (p.y / _picture_size.y - 0.5) * _plane_height())
 
+## Whether the Sun is up at a place (the same test as [method Solar.is_daylight], using the sub-solar point the flat view
+## already computed for this frame so it is cheap enough to run for every object every frame).
+##
+## [param lat]: latitude in degrees.
+## [param lon]: longitude in degrees.
+## Returns: true in daylight.
+func _is_lit(lat: float, lon: float) -> bool:
+	var decl := deg_to_rad(_flat._decl)
+	var latr := deg_to_rad(lat)
+	var ha := deg_to_rad(lon - _flat._sub_lon)
+	return sin(latr) * sin(decl) + cos(latr) * cos(decl) * cos(ha) > sin(deg_to_rad(-0.833))
+
+## Whether the Sun is up at the place under a picture position. A position off the map (the hour labels sit on a ring
+## round the polar maps, or under the rectangular one) counts as the nearest place on the map.
+##
+## [param p]: pixel position in the picture.
+## Returns: true in daylight.
+func _is_lit_at_picture(p: Vector2) -> bool:
+	var q := p
+	if view_type == Settings.VIEW_RECT:
+		var r: Rect2 = _flat._rect_map()
+		q = Vector2(clampf(p.x, r.position.x, r.end.x), clampf(p.y, r.position.y, r.end.y))
+	else:
+		var c: Vector2 = _flat._center()
+		var rad: float = _flat._map_radius() * 0.99
+		q = c + (p - c).limit_length(rad)
+	var hit: Dictionary = _flat.pick(q)
+	return not hit["hit"] or _is_lit(hit["lat"], hit["lon"])
+
+## Lets the shadow-casting parts of a 3D object cast shadows by day and stops them at night: shadows come from a light
+## at the Sun, which would otherwise shadow things on the night side where the Sun is not shining. Parts that never
+## cast shadows (labels) are left alone.
+##
+## [param node]: the object (it and its descendants are included).
+## [param lit]: true if the object is in daylight.
+func _set_casts_shadow(node: Node, lit: bool) -> void:
+	if node is GeometryInstance3D:
+		var g := node as GeometryInstance3D
+		if g.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_ON:
+			g.set_meta("casts_shadow", true)      # remember, so it can be switched back on at dawn
+		if g.has_meta("casts_shadow"):
+			g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if lit else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for child in node.get_children():
+		_set_casts_shadow(child, lit)
+
 # MARK: - Camera
 
 ## Puts the camera at the start view (looking straight down, whole map in view) at once.
@@ -296,23 +341,40 @@ func _process(_delta: float) -> void:
 	_update_satellites()
 	_update_solar_lunar_points()
 
-## Places the balls under the Sun and Moon on the map at those points (created on first use, raised by their radius so
-## they rest on the map), each shown according to its setting.
+## Places the Dürer Sun and Moon pictures at the sub-solar and sub-lunar points on every flat map (created on first use),
+## each shown according to its setting. They lie flat on the map, just above it, like the map's own markings.
 func _update_solar_lunar_points() -> void:
-	if _sun_point == null:
-		var r := PLANE_WIDTH * SolarLunarMarker.MAP_FRACTION
-		_sun_point = SolarLunarMarker.build(SolarLunarMarker.SUN_COLOR, r)
-		_moon_point = SolarLunarMarker.build(SolarLunarMarker.MOON_COLOR, r)
-		_stage_vp.add_child(_sun_point)
-		_stage_vp.add_child(_moon_point)
-	_sun_point.visible = SolarLunarMarker.sun_enabled()
-	_moon_point.visible = SolarLunarMarker.moon_enabled()
+	if _sun_art == null:
+		_sun_art = _make_art(_flat._durer_sun_tex)
+		_moon_art = _make_art(_flat._durer_moon_tex)
+	_sun_art.visible = SolarLunarMarker.sun_enabled()
+	_moon_art.visible = SolarLunarMarker.moon_enabled()
 	var now := Solar.now()
-	var raise := Vector3(0.0, PLANE_WIDTH * SolarLunarMarker.MAP_FRACTION, 0.0)
+	var raise := Vector3(0.0, 0.03, 0.0)
 	var sun := SolarLunarMarker.sun_point(now)
 	var moon := SolarLunarMarker.moon_point(now)
-	_sun_point.position = _picture_to_world(_flat.project(sun.x, sun.y)) + raise
-	_moon_point.position = _picture_to_world(_flat.project(moon.x, moon.y)) + raise
+	_sun_art.position = _picture_to_world(_flat.project(sun.x, sun.y)) + raise
+	_moon_art.position = _picture_to_world(_flat.project(moon.x, moon.y)) + raise + Vector3(0.0, 0.01, 0.0)
+
+## Makes a flat picture (a sprite lying on the map, facing up) of the Sun or Moon engraving, both the same size. It is
+## added to the stage but hidden until [method _update_solar_lunar_points] shows it.
+##
+## [param tex]: the engraving's texture.
+## Returns: the Sprite3D.
+func _make_art(tex: Texture2D) -> Sprite3D:
+	var sprite := Sprite3D.new()
+	sprite.texture = tex
+	sprite.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	sprite.axis = Vector3.AXIS_Y
+	sprite.double_sided = true
+	sprite.shaded = false
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+	sprite.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+	sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sprite.pixel_size = PLANE_WIDTH * SolarLunarMarker.MAP_FRACTION * FlatView.DURER_SIZE_IN_RADII / float(tex.get_width())
+	sprite.visible = false
+	_stage_vp.add_child(sprite)
+	return sprite
 
 ## Floats the Sun above the sub-solar point on the map and puts the Sun light there, so shadows fall away from it.
 ## Hidden when `show_sun` is off.
@@ -616,6 +678,7 @@ func _update_hours() -> void:
 		var at := _picture_to_world(spec["pos"])
 		node.transform = Transform3D(Basis(Vector3.UP, -float(spec["rot"])) * Basis(Vector3.RIGHT, -PI / 2.0),
 			at + Vector3(0.0, float(item["depth"]) * 0.5 + 0.01, 0.0))
+		_set_casts_shadow(node, _is_lit_at_picture(spec["pos"]))
 
 # --- cities
 
@@ -645,6 +708,7 @@ func _update_cities(recheck: bool) -> void:
 					_city_items.append({"node": holder, "lat": float(city["Latitude"]), "lon": float(city["Longitude"])})
 	for item in _city_items:
 		(item["node"] as Node3D).position = _picture_to_world(_flat.project(item["lat"], item["lon"]))
+		_set_casts_shadow(item["node"], _is_lit(item["lat"], item["lon"]))
 
 # --- earthquakes
 
@@ -688,6 +752,7 @@ func _update_quakes(recheck: bool) -> void:
 				_quake_items.append({"node": holder, "lat": float(q["lat"]), "lon": float(q["lon"])})
 	for item in _quake_items:
 		(item["node"] as Node3D).position = _picture_to_world(_flat.project(item["lat"], item["lon"]))
+		_set_casts_shadow(item["node"], _is_lit(item["lat"], item["lon"]))
 
 # --- satellites: all at the same height over the map
 
@@ -722,6 +787,7 @@ func _update_satellites() -> void:
 		var ground := _picture_to_world(here_px)
 		(item["holder"] as Node3D).transform = Transform3D(Basis(along, up, side) * Basis.from_scale(Vector3.ONE * SAT_SCALE),
 			ground + Vector3(0.0, SAT_HEIGHT, 0.0))
+		_set_casts_shadow(item["holder"], _is_lit(float(s["lat"]), float(s["lon"])))
 		var km := int(round(float(s["alt_km"])))
 		if km != item["km"]:
 			item["km"] = km
