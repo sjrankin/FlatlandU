@@ -142,6 +142,11 @@ struct ScreenItem: Identifiable {
     var accent = ""
     /// Row: short text before the title (a magnitude, say).
     var leading = ""
+    /// Row: short text shown in a small red capsule after the title (such as "NEW").
+    var badge = ""
+    /// Row: "#rrggbb" for a filled dot drawn before the leading text. When set, the leading text is drawn in the normal
+    /// text color instead of [accent].
+    var dot = ""
     /// Row: the key of a bool shown as a check box.
     var checkKey = ""
     /// Paragraph: "title", "headline", "caption" or "mono". Action: "destructive" or "prominent".
@@ -220,6 +225,8 @@ struct ScreenSchema {
             item.subtitle = d["subtitle"] as? String ?? ""
             item.accent = d["accent"] as? String ?? ""
             item.leading = d["leading"] as? String ?? ""
+            item.dot = d["dot"] as? String ?? ""
+            item.badge = d["badge"] as? String ?? ""
             item.checkKey = d["check_key"] as? String ?? ""
             item.style = d["style"] as? String ?? ""
             item.confirm = d["confirm"] as? String ?? ""

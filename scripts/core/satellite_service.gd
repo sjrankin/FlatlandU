@@ -13,6 +13,9 @@ const URL_FORMAT := "https://celestrak.org/NORAD/elements/gp.php?CATNR=%d&FORMAT
 const CACHE_PATH := "user://satellites.tle"
 ## How old the saved elements may get (12 hours) before [method refresh_if_stale] downloads new ones.
 const MAX_AGE_SECONDS := 12.0 * 3600.0
+## How often a running app checks whether the saved elements have become stale (12 hours, the same as
+## [constant MAX_AGE_SECONDS]); see [member _recheck_timer].
+const RECHECK_SECONDS := 12.0 * 3600.0
 ## Mean Earth radius in km, used to turn a distance from the center into an altitude.
 const EARTH_RADIUS_KM := 6371.0
 ## Equatorial Earth radius in km, used by the J2 correction in [method position_of].
@@ -51,6 +54,8 @@ var _raw: Dictionary = {}
 var _fetch_queue: Array = []
 ## How many downloads in the current refresh gave usable data.
 var _fetch_ok := 0
+## Fires every [constant RECHECK_SECONDS] while the app runs, to call [method refresh_if_stale].
+var _recheck_timer: Timer
 ## True while a refresh is running, so another is not started.
 var _fetching := false
 ## Text about the latest fetch for the Live Data dialog.
@@ -60,7 +65,7 @@ var last_fetch_unix := 0.0
 ## The HTTPRequest node that downloads the element sets.
 var _request: HTTPRequest
 
-## Creates the HTTP request, loads the saved elements, and starts watching the `show_satellites` setting so turning
+## Creates the HTTP request, loads the saved elements, starts the 12-hour recheck timer, and starts watching the `show_satellites` setting so turning
 ## satellites on fetches fresh data if the saved ones are stale.
 func _ready() -> void:
 	_request = HTTPRequest.new()
@@ -71,6 +76,13 @@ func _ready() -> void:
 	Settings.changed.connect(func(key: String, _v: Variant) -> void:
 		if key == "show_satellites":
 			refresh_if_stale())
+	# An app left running for a long time rechecks the elements' age now and then; the check downloads only if stale.
+	_recheck_timer = Timer.new()
+	_recheck_timer.wait_time = RECHECK_SECONDS
+	_recheck_timer.one_shot = false
+	_recheck_timer.timeout.connect(refresh_if_stale)
+	add_child(_recheck_timer)
+	_recheck_timer.start()
 	refresh_if_stale()
 
 ## Whether satellites are switched on.

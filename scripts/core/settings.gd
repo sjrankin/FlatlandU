@@ -26,6 +26,8 @@ const VIEW_GLOBE := "3DGlobe"
 const VIEW_CUBIC := "Cubic"
 ## `view_type` value for the rectangular (equirectangular) map.
 const VIEW_RECT := "Rectangular"
+## The value of a sound setting (such as `quake_sound`) that means "No Sound": nothing is played.
+const NO_SOUND := ""
 
 ## `hour_type` value: no hour labels.
 const HOURS_NONE := "NoHours"
@@ -85,10 +87,12 @@ const DEFAULTS := {
 	"quake_highlight_new": true,  # mark new quakes
 	"quake_indicator": "Radiating Rings",  # how new quakes are marked (see PowerManager.quakes_animate)
 	"quake_recent_hours": 24,  # how long a quake counts as new, in hours
+	"quake_group": false,  # group nearby earthquakes on the map: only the largest of a group is drawn
+	"quake_group_km": 100,  # how close (km) earthquakes must be to one another to be grouped
 	"city_shape": "Uniform Flush Spheres",  # 3D shape used for a city
 	"city_scale": "Normal",  # size of those shapes
 	"enable_sounds": true,  # play sounds
-	"quake_sound": "Chime.mp3",  # sound file played for a new quake
+	"quake_sound": "Chime.mp3",  # sound file played for a new quake (NO_SOUND for none)
 	"home_latitude": 51.4779,  # latitude of the home location
 	"home_longitude": 0.0,  # longitude of the home location
 	"home_name": "Greenwich",  # name of the home location

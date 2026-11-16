@@ -203,6 +203,8 @@ func _quakes(tabs: TabContainer) -> void:
 		["Static Arrow", "Static Arrow"], ["Pyramid", "Pyramid"], ["Cone", "Cone"], ["Box", "Box"],
 		["Cylinder", "Cylinder"], ["Capsule", "Capsule"], ["Tethered Magnitude", "Tethered Magnitude"]]))
 	p.add_child(SettingControls.option("Indicator scale", "quake_scale", [["Small", "Small"], ["Normal", "Normal"], ["Large", "Large"]]))
+	p.add_child(SettingControls.check("Group nearby earthquakes (show the largest of each group)", "quake_group"))
+	p.add_child(SettingControls.spin("Group distance", "quake_group_km", 10, 1000, 10, " km"))
 	p.add_child(SettingControls.check("Highlight new earthquakes", "quake_highlight_new"))
 	p.add_child(SettingControls.option("New earthquake indicator", "quake_indicator", [
 		["None", "None"], ["Static Ring", "Static Ring"], ["Animated Ring", "Animated Ring"],
@@ -213,7 +215,7 @@ func _quakes(tabs: TabContainer) -> void:
 		["Last week", 168], ["Last 10 days", 240]]))
 	p.add_child(SettingControls.spin("Fetch interval", "quake_fetch_interval", 15, 3600, 15, " s"))
 	p.add_child(SettingControls.option("New-quake sound", "quake_sound", [
-		["Chime", "Chime.mp3"], ["Cymbal", "Cymbal.mp3"], ["Doorbell", "Doorbell.mp3"],
+		["No Sound", Settings.NO_SOUND], ["Chime", "Chime.mp3"], ["Cymbal", "Cymbal.mp3"], ["Doorbell", "Doorbell.mp3"],
 		["Fiddle", "Fiddle.mp3"], ["Gong", "Gong.mp3"], ["Pips", "gts_pips.mp3"]]))
 
 ## Builds the Colors (and Fonts) page: the label font and the colors for the grid, hours, background and cities.

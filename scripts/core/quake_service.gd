@@ -168,6 +168,84 @@ func visible_quakes() -> Array:
 				break
 	return out
 
+## The quakes to draw on the maps: [method visible_quakes], or, when "Group nearby earthquakes" (`quake_group`) is on, one
+## quake per group. Quakes are grouped by size: going from the largest magnitude down, a quake within the grouping
+## distance (`quake_group_km`) of a larger quake already chosen joins that quake's group, and any other quake starts a
+## group of its own. So the largest quake of a group is always the one shown, for as long as it is shown at all (once it
+## ages out of [method visible_quakes], the next largest one of the group takes its place).
+##
+## Each returned quake is a copy of the shown quake with two more keys: "group_count" (how many quakes the group has,
+## 1 for a quake on its own) and "group_newest" (the time of the group's most recent quake, so a group with a new quake
+## in it counts as new; see [method is_new]).
+##
+## Returns: an Array of quake Dictionaries (a subset of [member quakes], copied).
+func map_quakes() -> Array:
+	var shown := visible_quakes()
+	if not Settings.get_bool("quake_group"):
+		return shown
+	var by_size := shown.duplicate()
+	by_size.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if a["magnitude"] != b["magnitude"]:
+			return a["magnitude"] > b["magnitude"]
+		return a["time"] > b["time"])
+	var limit_km := Settings.get_float("quake_group_km")
+	var groups: Array = []
+	for q in by_size:
+		var home: Dictionary = {}
+		for g in groups:
+			if distance_km(g["lat"], g["lon"], q["lat"], q["lon"]) <= limit_km:
+				home = g
+				break
+		if home.is_empty():
+			var rep: Dictionary = q.duplicate()
+			rep["group_count"] = 1
+			rep["group_newest"] = q["time"]
+			groups.append(rep)
+		else:
+			home["group_count"] += 1
+			home["group_newest"] = maxf(home["group_newest"], q["time"])
+	return groups
+
+## The distance between two places on the Earth's surface.
+##
+## [param lat1]: first latitude in degrees.
+## [param lon1]: first longitude in degrees.
+## [param lat2]: second latitude.
+## [param lon2]: second longitude.
+## Returns: kilometres along the surface (the great-circle distance, with the Earth a sphere of radius 6371 km).
+static func distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+	var p1 := deg_to_rad(lat1)
+	var p2 := deg_to_rad(lat2)
+	var dp := p2 - p1
+	var dl := deg_to_rad(lon2 - lon1)
+	var a := sin(dp * 0.5) * sin(dp * 0.5) + cos(p1) * cos(p2) * sin(dl * 0.5) * sin(dl * 0.5)
+	return 2.0 * 6371.0 * asin(minf(1.0, sqrt(a)))
+
+## Whether an earthquake is "new": the "Highlight new earthquakes" setting is on and the quake happened within the
+## "New means within" time (`quake_recent_hours`). The map's new-quake indicators and the earthquake list's New marker
+## both use this. A grouped quake (from [method map_quakes]) is new if any quake in its group is.
+##
+## [param q]: the quake Dictionary.
+## [param now]: the current Unix time in seconds (default: now).
+## Returns: true if the quake is new.
+func is_new(q: Dictionary, now: float = Time.get_unix_time_from_system()) -> bool:
+	var when: float = maxf(float(q["time"]), float(q.get("group_newest", q["time"])))
+	return Settings.get_bool("quake_highlight_new") and now - when <= Settings.get_float("quake_recent_hours") * 3600.0
+
+## How long ago a quake happened, as short text: "12 min", "3 h 12 m", "2 d 4 h".
+##
+## [param q]: the quake Dictionary.
+## [param now]: the current Unix time in seconds (default: now).
+## Returns: the text.
+func age_text(q: Dictionary, now: float = Time.get_unix_time_from_system()) -> String:
+	var minutes := maxi(0, int((now - float(q["time"])) / 60.0))
+	if minutes < 60:
+		return "%d min" % minutes
+	var hours := minutes / 60
+	if hours < 24:
+		return "%d h %d m" % [hours, minutes % 60]
+	return "%d d %d h" % [hours / 24, hours % 24]
+
 ## Whether a quake falls inside an earthquake region and within its magnitude and age limits. A region whose first
 ## longitude is greater than its second crosses the antimeridian (180 degrees).
 ##

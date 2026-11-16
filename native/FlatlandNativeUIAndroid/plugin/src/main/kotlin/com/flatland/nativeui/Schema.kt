@@ -131,6 +131,9 @@ data class ScreenOption(val label: String, val value: Any, val group: String)
  * @property subtitle row: the second line.
  * @property accent row: "#rrggbb" for the leading text.
  * @property leading row: short text before the title (a magnitude, say).
+ * @property badge row: short text shown in a small red capsule after the title (such as "NEW").
+ * @property dot row: "#rrggbb" for a filled dot drawn before the leading text; the leading text is then drawn in the
+ * normal text color instead of [accent].
  * @property checkKey row: the key of a Boolean shown as a check box.
  * @property style paragraph: "title", "headline", "caption" or "mono"; action: "destructive" or "prominent".
  * @property selected row: highlighted as the current choice.
@@ -153,6 +156,8 @@ data class ScreenItem(
     val subtitle: String = "",
     val accent: String = "",
     val leading: String = "",
+    val dot: String = "",
+    val badge: String = "",
     val checkKey: String = "",
     val style: String = "",
     val selected: Boolean = false,
@@ -237,7 +242,7 @@ data class ScreenSchema(
                     id = stable, kind = kind, key = key, title = d.optString("title"), options = options,
                     minimum = d.optDouble("min", 0.0), maximum = d.optDouble("max", 1.0), step = d.optDouble("step", 1.0),
                     suffix = d.optString("suffix"), actionId = actionId, detail = d.optString("detail"),
-                    subtitle = d.optString("subtitle"), accent = d.optString("accent"), leading = d.optString("leading"),
+                    subtitle = d.optString("subtitle"), accent = d.optString("accent"), leading = d.optString("leading"), dot = d.optString("dot"), badge = d.optString("badge"),
                     checkKey = d.optString("check_key"), style = d.optString("style"),
                     selected = d.optBoolean("selected"), dimmed = d.optBoolean("dimmed"), confirm = d.optString("confirm"),
                 ))

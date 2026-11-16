@@ -306,6 +306,9 @@ func _draw() -> void:
 
 ## Width of the Dürer Sun and Moon pictures on the rectangular map, in ball radii (see [constant SolarLunarMarker.MAP_FRACTION]).
 const DURER_SIZE_IN_RADII := 4.0
+## Opacity of the Dürer Sun and Moon pictures (the pictures only, not the map): 0.75 means 75 percent opaque, so the map
+## shows faintly through them.
+const DURER_OPACITY := 0.75
 
 ## Draws the Dürer Sun and Moon pictures at the sub-solar and sub-lunar points, both the same size, sized from
 ## [constant SolarLunarMarker.MAP_FRACTION]. Each one follows its own setting. Shown on every flat map. Skipped in
@@ -324,7 +327,7 @@ func _draw_solar_lunar_points() -> void:
 	for entry in entries:
 		var at: Vector2 = entry[0]
 		var p := project(at.x, at.y)
-		draw_texture_rect(entry[1], Rect2(p - Vector2(d, d) * 0.5, Vector2(d, d)), false)
+		draw_texture_rect(entry[1], Rect2(p - Vector2(d, d) * 0.5, Vector2(d, d)), false, Color(1.0, 1.0, 1.0, DURER_OPACITY))
 
 ## The opacity of the night shading, from the `night_darkness` setting (a little lighter than the table value).
 ##
@@ -654,7 +657,7 @@ func continue_polyline(pts: PackedVector2Array, col: Color) -> void:
 func _draw_quakes() -> void:
 	if not Settings.get_bool("enable_earthquakes"):
 		return
-	for q in QuakeService.visible_quakes():
+	for q in QuakeService.map_quakes():
 		var p := project(q["lat"], q["lon"])
 		var col := QuakeService.magnitude_color(q["magnitude"])
 		var indicator := Settings.get_string("quake_indicator")

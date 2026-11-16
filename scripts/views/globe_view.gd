@@ -560,7 +560,7 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 		"show_shadows_3d", "graphics_quality":
 			_apply_shadows()
 		"enable_earthquakes", "quake_min_magnitude", "quake_max_age_days", "quake_shape", "quake_scale", \
-		"quake_indicator", "quake_highlight_new", "quake_recent_hours":
+		"quake_indicator", "quake_highlight_new", "quake_recent_hours", "quake_group", "quake_group_km":
 			_rebuild_quakes()
 		"show_heritage_sites":
 			_rebuild_sites()
@@ -1117,9 +1117,7 @@ func _city_floating(c: Dictionary, col: Color, rel: float, is_sphere: bool, mult
 		holder.add_child(body)
 		_register_dn(body, lat, lon, col, col)
 	else:
-		var box := BoxMesh.new()
-		box.size = Vector3.ONE * size * 2.0
-		body.mesh = box
+		body.mesh = Shapes.outlined_box(Vector3.ONE * size * 2.0)
 		holder.add_child(body)
 		_register_outline(body, lat, lon, col)
 	body.position = Vector3(0, stem_len - size, 0)
@@ -1141,9 +1139,7 @@ func _city_block(c: Dictionary, col: Color, rel: float, is_box: bool, mult: floa
 	_cities_node.add_child(holder)
 	var mi := MeshInstance3D.new()
 	if is_box:
-		var box := BoxMesh.new()
-		box.size = Vector3(hdim, size, hdim)
-		mi.mesh = box
+		mi.mesh = Shapes.outlined_box(Vector3(hdim, size, hdim))
 		holder.add_child(mi)
 		_register_outline(mi, lat, lon, col)
 	else:
@@ -1589,7 +1585,8 @@ func _renew_next_hour() -> void:
 ## filters, the enabled switch); a feed update goes through [method _sync_quakes], which touches only the quakes that
 ## came or went. The shapes are those of Flatland's EarthquakeShapes: animated or static arrow, sphere, pulsating
 ## sphere, pyramid, cone, box, cylinder, capsule or tethered magnitude; each has its magnitude written on the surface,
-## and quakes inside the "recent" window get the chosen new-earthquake indicator.
+## and quakes inside the "recent" window get the chosen new-earthquake indicator (except with tethered magnitude, which has its
+## own spinning bright red spheres).
 func _rebuild_quakes() -> void:
 	_clear(_quakes_node)
 	_dn_items = _dn_items.filter(func(i): return not (is_instance_valid(i["node"]) and i["node"].get_parent() != null and _quakes_node.is_ancestor_of(i["node"])))
@@ -1603,20 +1600,21 @@ func _rebuild_quakes() -> void:
 func _sync_quakes() -> void:
 	var wanted: Dictionary = {}
 	if Settings.get_bool("enable_earthquakes"):
-		for q in QuakeService.visible_quakes():
-			wanted[str(q["id"])] = q
+		for q in QuakeService.map_quakes():
+			wanted[_quake_key(q)] = q
 	for id in _quake_nodes.keys():
 		if not wanted.has(id):
 			_remove_quake(id)
 	var now := Time.get_unix_time_from_system()
-	var recent_s := Settings.get_float("quake_recent_hours") * 3600.0
-	var highlight := Settings.get_bool("quake_highlight_new")
+	# The tethered magnitude shape marks new quakes with its own spinning bright red spheres, so it gets no "new quake" indicator
+	# (the expanding ring and the others) as well.
+	var highlight := Settings.get_bool("quake_highlight_new") and Settings.get_string("quake_shape") != "Tethered Magnitude"
 	for id in wanted:
 		var q: Dictionary = wanted[id]
 		if not _quake_nodes.has(id):
 			_quake_nodes[id] = {"group": _build_quake(q), "indicator": null}
 		var entry: Dictionary = _quake_nodes[id]
-		var recent := highlight and now - float(q["time"]) <= recent_s
+		var recent := highlight and QuakeService.is_new(q, now)
 		if recent and entry["indicator"] == null:
 			var holder := Node3D.new()
 			(entry["group"] as Node3D).add_child(holder)
@@ -1627,8 +1625,16 @@ func _sync_quakes() -> void:
 			_discard_nodes(entry["indicator"])
 			entry["indicator"] = null
 
+## The key a drawn quake is filed under in [member _quake_nodes]: its id, plus the size of its group, so a quake is drawn
+## again (with its count) when its group gains or loses a member.
+##
+## [param q]: the quake Dictionary (from [method QuakeService.map_quakes]).
+## Returns: the key.
+func _quake_key(q: Dictionary) -> String:
+	return "%s#%d" % [q["id"], int(q.get("group_count", 1))]
+
 ## Builds everything for one earthquake: the shape ([method _make_quake_shape]) and its magnitude written on the
-## surface ("M6.4"), colored by magnitude. The nodes are grouped under one Node3D so the quake can be removed in one
+## surface ("M6.4", except for tethered magnitude), colored by magnitude. The nodes are grouped under one Node3D so the quake can be removed in one
 ## go ([method _remove_quake]).
 ##
 ## [param q]: the quake Dictionary.
@@ -1643,10 +1649,14 @@ func _build_quake(q: Dictionary) -> Node3D:
 	var holder := _make_quake_shape(q, col)
 	if holder != null:
 		group.add_child(holder)
-	# Magnitude text lying on the surface.
+	# Magnitude text lying on the surface (not for tethered magnitude, whose disc already shows the magnitude).
+	if Settings.get_string("quake_shape") == "Tethered Magnitude":
+		return group
 	var s := "%.2f" % mag
 	if s.ends_with("0"):
 		s = s.left(-1)
+	if int(q.get("group_count", 1)) > 1:
+		s += " (%d)" % int(q["group_count"])      # a group of quakes: how many it stands for
 	var em := 0.05 * (7.0 + mag)
 	var radial := R + 0.3 + (mag / 10.0) * 0.7
 	var t := _flat_text("M" + s, lat, lon, radial, em, 0.15, true, Geo.quake_font())
@@ -1732,7 +1742,8 @@ func _make_quake_shape(q: Dictionary, col: Color) -> Node3D:
 			return holder
 		"Sphere", "Pulsating Sphere":
 			var pulsing := shape == "Pulsating Sphere"
-			var holder := _up_node(lat, lon, R + 0.5)
+			# A plain sphere rests on the surface; a pulsating one is centered on it and swells from there.
+			var holder := _up_node(lat, lon, R if pulsing else R + 0.5)
 			var sph := SphereMesh.new()
 			var r := mag * 0.5 * (0.12 if pulsing else 0.1)
 			sph.radius = r
@@ -1793,7 +1804,7 @@ func _make_quake_shape(q: Dictionary, col: Color) -> Node3D:
 	return null
 
 ## Builds the "Tethered Magnitude" shape (Flatland's TetheredNumber): a pole topped with a translucent disc bearing
-## the magnitude. Recent quakes also get a spinning rim of gold spheres.
+## the magnitude ("M5.8", or "M5.8 (3)" for a group of three quakes). Recent quakes also get a spinning rim of bright red spheres.
 ##
 ## [param q]: the quake Dictionary.
 ## [param col]: its color.
@@ -1808,8 +1819,8 @@ func _tethered_quake(q: Dictionary, col: Color, mult: float) -> Node3D:
 	var height := 2.5 * local
 	var pole := MeshInstance3D.new()
 	var pm := CylinderMesh.new()
-	pm.top_radius = local * 0.0501
-	pm.bottom_radius = local * 0.0501
+	pm.top_radius = local * 0.1002
+	pm.bottom_radius = local * 0.1002
 	pm.height = height
 	pole.mesh = pm
 	pole.position = Vector3(0, height * 0.5, 0)
@@ -1826,11 +1837,17 @@ func _tethered_quake(q: Dictionary, col: Color, mult: float) -> Node3D:
 	disc.position = Vector3(0, height, 0)
 	holder.add_child(disc)
 	var tm := TextMesh.new()
-	tm.text = "%.1f" % q["magnitude"]
+	tm.text = "M%.1f" % q["magnitude"]
+	if int(q.get("group_count", 1)) > 1:
+		tm.text += " (%d)" % int(q["group_count"])      # a group of quakes: how many it stands for
 	tm.font = Geo.label_font(900)
 	tm.font_size = 64
 	tm.pixel_size = (0.6 + 0.3 * local) / 64.0
 	tm.depth = 0.05
+	# The longer text must still fit on the disc: shrink it if it is wider than 85 percent of the disc's width.
+	var text_width := tm.get_aabb().size.x
+	if text_width > 1.7 * disc_r:
+		tm.pixel_size *= 1.7 * disc_r / text_width
 	var txt := MeshInstance3D.new()
 	txt.mesh = tm
 	txt.material_override = Shapes.plain(Color.BLACK)
@@ -1846,14 +1863,14 @@ func _tethered_quake(q: Dictionary, col: Color, mult: float) -> Node3D:
 	rim.material_override = plain_for_rim(col)
 	rim.position = Vector3(0, height, 0)
 	holder.add_child(rim)
-	if Settings.get_bool("quake_highlight_new") and Time.get_unix_time_from_system() - float(q["time"]) <= Settings.get_float("quake_recent_hours") * 3600.0:
+	if QuakeService.is_new(q):
 		var sphere := SphereMesh.new()
 		sphere.radius = 0.215
 		sphere.height = 0.43
 		for a in range(0, 360, 45):
 			var sp := MeshInstance3D.new()
 			sp.mesh = sphere
-			sp.material_override = Shapes.plain(Color("#ffd700"))
+			sp.material_override = Shapes.plain(Color("#ff0000"))
 			sp.position = Vector3(rim_r * cos(deg_to_rad(a)), 0, rim_r * sin(deg_to_rad(a)))
 			rim.add_child(sp)
 		var speed := maxf(0.09994492, 5.0 * (1.0 - local))

@@ -55,9 +55,40 @@ static func plain(color: Color) -> StandardMaterial3D:
 	_plain_cache[key] = m
 	return m
 
+## A box whose every face shows the whole of the outline texture (Godot's BoxMesh spreads one texture over all six faces,
+## so only the edges of the whole sheet would get an outline). Used with [method outline_material] for the cities that
+## are boxes.
+##
+## [param size]: the box's size on each axis.
+## Returns: the ArrayMesh, centered on the origin.
+static func outlined_box(size: Vector3) -> ArrayMesh:
+	var h := size * 0.5
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Each face: its outward normal, then its corners counter-clockwise as seen from outside (the first is the texture's
+	# top left).
+	var faces := [
+		[Vector3.RIGHT, [Vector3(h.x, h.y, h.z), Vector3(h.x, -h.y, h.z), Vector3(h.x, -h.y, -h.z), Vector3(h.x, h.y, -h.z)]],
+		[Vector3.LEFT, [Vector3(-h.x, h.y, -h.z), Vector3(-h.x, -h.y, -h.z), Vector3(-h.x, -h.y, h.z), Vector3(-h.x, h.y, h.z)]],
+		[Vector3.UP, [Vector3(-h.x, h.y, -h.z), Vector3(-h.x, h.y, h.z), Vector3(h.x, h.y, h.z), Vector3(h.x, h.y, -h.z)]],
+		[Vector3.DOWN, [Vector3(-h.x, -h.y, h.z), Vector3(-h.x, -h.y, -h.z), Vector3(h.x, -h.y, -h.z), Vector3(h.x, -h.y, h.z)]],
+		[Vector3.BACK, [Vector3(-h.x, h.y, h.z), Vector3(-h.x, -h.y, h.z), Vector3(h.x, -h.y, h.z), Vector3(h.x, h.y, h.z)]],
+		[Vector3.FORWARD, [Vector3(h.x, h.y, -h.z), Vector3(h.x, -h.y, -h.z), Vector3(-h.x, -h.y, -h.z), Vector3(-h.x, h.y, -h.z)]],
+	]
+	var uvs := [Vector2(0, 0), Vector2(0, 1), Vector2(1, 1), Vector2(1, 0)]
+	for f in faces:
+		var corners: Array = f[1]
+		# Godot draws clockwise triangles as front faces, so the corners go in as (0, 2, 1) and (0, 3, 2).
+		for tri in [[0, 2, 1], [0, 3, 2]]:
+			for i in tri:
+				st.set_normal(f[0])
+				st.set_uv(uvs[i])
+				st.add_vertex(corners[i])
+	return st.commit()
+
 ## The outlined block look for cities (Flatland's MakeOutlineCubeTexture): the color shows through the transparent
-## parts of `BlockTexture2.png` and the outline is drawn over it. The night version also glows a little, so the block
-## can be seen in the dark. Cached.
+## parts of `BlockTexture2.png` and the outline is drawn over it. The night version also glows a little (never the outline, which stays black), so
+## the block can be seen in the dark. Cached.
 ##
 ## [param color]: the block's color.
 ## [param night]: true for the glowing night version.
@@ -75,12 +106,15 @@ static func outline_material(color: Color, night: bool = false) -> StandardMater
 	base.fill(color)
 	base.blend_rect(src, Rect2i(Vector2i.ZERO, src.get_size()), Vector2i.ZERO)
 	var m := StandardMaterial3D.new()
-	m.albedo_texture = ImageTexture.create_from_image(base)
-	m.roughness = 0.5
-	m.metallic_specular = 0.6
+	var tex_image := ImageTexture.create_from_image(base)
+	m.albedo_texture = tex_image
+	m.roughness = 1.0            # matte with no shine, so the black outline stays black instead of reflecting grey
+	m.metallic_specular = 0.0
 	if night:
+		# The glow comes from the same picture, so the black outline stays black (a plain emission color would tint it).
 		m.emission_enabled = true
-		m.emission = color
+		m.emission = Color.WHITE
+		m.emission_texture = tex_image
 		m.emission_energy_multiplier = 0.4
 	_outline_cache[key] = m
 	return m

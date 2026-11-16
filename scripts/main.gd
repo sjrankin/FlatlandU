@@ -193,6 +193,7 @@ func _ready() -> void:
 		_globe.set_camera_mode({"moon": GlobeScript.CamMode.FROM_MOON, "sun": GlobeScript.CamMode.FROM_SUN, "lookmoon": GlobeScript.CamMode.LOOK_AT_MOON, "flight": GlobeScript.CamMode.FLIGHT}.get(_vantage, 0))
 	if _cam_args.size() == 3:
 		_globe.set_camera(_cam_args[0], _cam_args[1], _cam_args[2])
+		_flat.set_camera(_cam_args[0], _cam_args[1])
 	if _open_on_start != "":
 		call_deferred("_open_for_test", _open_on_start)
 	if _fake_quakes:
@@ -271,7 +272,7 @@ func _build_views() -> void:
 	_flat = FlatStage.new()
 	_flat.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_flat.hover_changed.connect(_on_hover)
-	_flat.location_clicked.connect(_on_location_clicked)
+	_flat.context_requested.connect(_on_flat_context_requested)
 	_content.add_child(_flat)
 
 ## Star tooltip: drawn here (not with Godot's built-in tooltip) so it can sit beside the mouse pointer instead of
@@ -422,14 +423,28 @@ const CTX_WHATS_HERE := 5
 ## Context menu item id: Camera Flight.
 const CTX_FLIGHT := 6
 
+## Context menu item ids from here up are the map types: this plus the index in [constant CTX_MAP_TYPES].
+const CTX_MAP_TYPE_BASE := 100
+## The map types offered in the context menu, as [menu text, `view_type` setting value], in menu order.
+const CTX_MAP_TYPES := [
+	["Globe", Settings.VIEW_GLOBE],
+	["Equirectangular", Settings.VIEW_RECT],
+	["North Polar", Settings.VIEW_FLAT_NORTH],
+	["South Polar", Settings.VIEW_FLAT_SOUTH],
+	["Cubic", Settings.VIEW_CUBIC],
+]
+
 ## The context menu for the 3D views; created on first use.
 var _context_menu: PopupMenu
 ## The `--vantage=` development flag: moon, sun, lookmoon, flight or flightreset, to start in that camera mode.
 var _vantage := ""
 ## The `--record=<file>` development flag: record 4 seconds to this file, then quit.
 var _record_test := ""
-## Where in the globe view the menu was asked for (used by What's Here).
+## Where in the view the menu was asked for (used by What's Here).
 var _context_point := Vector2.ZERO
+## Whether the menu was asked for in a flat map (true) or the globe or cube (false); the camera modes are only offered
+## for the globe.
+var _context_in_flat := false
 
 ## The globe asked for the context menu (right click, or a long press on a phone or tablet): shows it at that point.
 ## Choosing outside it closes it. The camera modes are not saved; they last until the camera is moved or the view is
@@ -437,6 +452,19 @@ var _context_point := Vector2.ZERO
 ##
 ## [param at]: where in the globe view, in pixels.
 func _on_globe_context_requested(at: Vector2) -> void:
+	_show_context_menu(at, false)
+
+## A flat map asked for the context menu (right click, or a long press on a phone or tablet): shows it at that point.
+##
+## [param at]: where in the flat map's view, in pixels.
+func _on_flat_context_requested(at: Vector2) -> void:
+	_show_context_menu(at, true)
+
+## Creates the context menu on first use, fills it for the view and shows it at a point.
+##
+## [param at]: where in the view, in pixels.
+## [param in_flat]: true if the view is a flat map, false for the globe or cube.
+func _show_context_menu(at: Vector2, in_flat: bool) -> void:
 	if _context_menu == null:
 		_context_menu = PopupMenu.new()
 		_context_menu.id_pressed.connect(_on_context_menu)
@@ -444,36 +472,52 @@ func _on_globe_context_requested(at: Vector2) -> void:
 			_context_menu.add_theme_font_size_override("font_size", Layout.font(18))
 		add_child(_context_menu)
 	_context_point = at
+	_context_in_flat = in_flat
 	_refresh_context_menu()
-	var screen := Vector2i(_globe_container.get_screen_position() + at)
-	_context_menu.popup(Rect2i(screen, Vector2i.ZERO))
+	var origin: Vector2 = _flat.get_screen_position() if in_flat else _globe_container.get_screen_position()
+	_context_menu.popup(Rect2i(Vector2i(origin + at), Vector2i.ZERO))
 
-## Rebuilds the menu's items: Show Earth from Moon and from Sun and Camera Flight (with check marks for the active
-## mode), View Moon from Earth, Reset View, and What's Here? if the click was on the Earth. Called each time the menu
-## opens and when the camera mode changes.
+## Rebuilds the menu's items (the camera modes only for the globe): Show Earth from Moon and from Sun and Camera Flight (with check marks for the active
+## mode), View Moon from Earth, Reset View, a divider and the map types (the current one checked), and What's Here? if
+## the click was on the Earth. Called each time the menu opens and when the camera mode changes.
 func _refresh_context_menu() -> void:
 	if _context_menu == null:
 		return
 	var mode: int = _globe.camera_mode()
 	_context_menu.clear()
-	_context_menu.add_check_item("Show Earth from Moon", CTX_FROM_MOON)
-	_context_menu.set_item_checked(_context_menu.item_count - 1, mode == GlobeScript.CamMode.FROM_MOON)
-	_context_menu.add_check_item("Show Earth from Sun", CTX_FROM_SUN)
-	_context_menu.set_item_checked(_context_menu.item_count - 1, mode == GlobeScript.CamMode.FROM_SUN)
-	_context_menu.add_item("View Moon from Earth", CTX_MOON_FROM_EARTH)
-	_context_menu.add_check_item("Camera Flight", CTX_FLIGHT)
-	_context_menu.set_item_checked(_context_menu.item_count - 1, mode == GlobeScript.CamMode.FLIGHT)
+	if not _context_in_flat:
+		_context_menu.add_check_item("Show Earth from Moon", CTX_FROM_MOON)
+		_context_menu.set_item_checked(_context_menu.item_count - 1, mode == GlobeScript.CamMode.FROM_MOON)
+		_context_menu.add_check_item("Show Earth from Sun", CTX_FROM_SUN)
+		_context_menu.set_item_checked(_context_menu.item_count - 1, mode == GlobeScript.CamMode.FROM_SUN)
+		_context_menu.add_item("View Moon from Earth", CTX_MOON_FROM_EARTH)
+		_context_menu.add_check_item("Camera Flight", CTX_FLIGHT)
+		_context_menu.set_item_checked(_context_menu.item_count - 1, mode == GlobeScript.CamMode.FLIGHT)
 	_context_menu.add_item("Reset View", CTX_RESET)
-	if _globe.pick(_context_point).get("hit", false):
+	_context_menu.add_separator()
+	var current := Settings.get_string("view_type")
+	for i in CTX_MAP_TYPES.size():
+		_context_menu.add_radio_check_item(CTX_MAP_TYPES[i][0], CTX_MAP_TYPE_BASE + i)
+		_context_menu.set_item_checked(_context_menu.item_count - 1, CTX_MAP_TYPES[i][1] == current)
+	if _context_pick().get("hit", false):
 		_context_menu.add_separator()
 		_context_menu.add_item("What's Here?", CTX_WHATS_HERE)
 
+## The place under the point the context menu was asked for, in whichever view it was asked in.
+##
+## Returns: {"hit": false}, or {"hit": true, "lat", "lon"}.
+func _context_pick() -> Dictionary:
+	return _flat.pick_screen(_context_point) if _context_in_flat else _globe.pick(_context_point)
+
 ## Runs the chosen menu item: choosing an active mode again turns it off (back to orbit); Reset View is the same as a
-## double click; What's Here? shows the place popup.
+## double click; a map type switches to that view (the `view_type` setting); What's Here? shows the place popup.
 ##
 ## [param id]: the item's id (a CTX_ constant).
 func _on_context_menu(id: int) -> void:
 	var mode: int = _globe.camera_mode()
+	if id >= CTX_MAP_TYPE_BASE and id < CTX_MAP_TYPE_BASE + CTX_MAP_TYPES.size():
+		Settings.set_value("view_type", CTX_MAP_TYPES[id - CTX_MAP_TYPE_BASE][1])
+		return
 	match id:
 		CTX_FROM_MOON:
 			_globe.set_camera_mode(GlobeScript.CamMode.ORBIT if mode == GlobeScript.CamMode.FROM_MOON else GlobeScript.CamMode.FROM_MOON)
@@ -486,7 +530,7 @@ func _on_context_menu(id: int) -> void:
 		CTX_RESET:
 			_action_reset_view()
 		CTX_WHATS_HERE:
-			var p: Dictionary = _globe.pick(_context_point)
+			var p := _context_pick()
 			if p.get("hit", false):
 				_on_location_clicked(p["lat"], p["lon"])
 
@@ -745,13 +789,23 @@ func _action_reset_view() -> void:
 	else:
 		_globe.reset_view()
 
-## The Snapshot button: grabs the picture now, before the dialog opens, so it shows the view at the moment of the
-## press (not whenever the file is saved, or with the dialog on top), then asks where to save it (starting in the last
-## folder used, or Pictures). See [method _save_snapshot].
+## The Snapshot button: grabs the picture of the view (with any dialogs that are open hidden for one frame, so they are
+## not in it, even if the button is pressed again while the Save dialog is up), then asks where to save it (starting in
+## the last folder used, or Pictures). The picture is taken before the dialog opens, so it shows the view at the moment
+## of the press, not whenever the file is saved. See [method _save_snapshot].
 func _action_snapshot() -> void:
-	# Grab the picture now, before the dialog opens, so the snapshot shows the view at the moment
-	# of the button press rather than whenever the file is saved (or with the dialog on top).
+	# Hide the open dialogs (they are drawn into the window), wait for a frame without them, and take the picture.
+	var hidden: Array[Window] = []
+	for child in get_children():
+		if child is Window and (child as Window).visible:
+			hidden.append(child as Window)
+			(child as Window).visible = false
+	if not hidden.is_empty():
+		await RenderingServer.frame_post_draw
+		await RenderingServer.frame_post_draw
 	_snapshot_image = get_viewport().get_texture().get_image()
+	for w in hidden:
+		w.visible = true
 	var d := Time.get_datetime_dict_from_system()
 	_snapshot_dialog.current_file = "Flatland Snapshot %04d-%02d-%02d %02d.%02d.%02d.png" % [d["year"], d["month"], d["day"], d["hour"], d["minute"], d["second"]]
 	# Open where the last snapshot was saved; the first time (or if that folder is gone), use Pictures.
@@ -827,6 +881,20 @@ var _touches := {}
 ## The distance between the first two fingers at the last event, to work out the pinch's change.
 var _pinch_span := 0.0
 
+## On macOS the mouse cursor can stay an I-beam (text cursor) after the mouse leaves a text field, because the system
+## cursor is only changed when a control asks for a different shape. Called on every mouse move: unless the mouse is over
+## a control that wants another shape (a text field's I-beam, a button's pointing hand, a resize edge), puts the arrow
+## back. Does nothing while a menu or dialog (a [Window]) is open.
+func _keep_arrow_cursor() -> void:
+	# Leave the cursor alone while a menu or dialog is open: they are windows of their own and manage their own cursor.
+	for child in get_children():
+		if child is Window and (child as Window).visible:
+			return
+	var hovered := get_viewport().gui_get_hovered_control()
+	if hovered != null and hovered.get_cursor_shape(hovered.get_local_mouse_position()) != Control.CURSOR_ARROW:
+		return
+	DisplayServer.cursor_set_shape(DisplayServer.CURSOR_ARROW)
+
 ## Two-finger pinch on a touch screen. Godot only makes pinch (magnify) gestures from a trackpad, so pinch-to-zoom is
 ## worked out here from the raw touch events and sent to the visible view ([method GlobeView.pinch_zoom] or
 ## [method FlatStage.pinch_zoom]); while two fingers are down both views are told so the emulated one-finger drag does
@@ -834,6 +902,8 @@ var _pinch_span := 0.0
 ##
 ## [param event]: the input event.
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and OS.get_name() == "macOS":
+		_keep_arrow_cursor()
 	if event is InputEventScreenTouch:
 		var st := event as InputEventScreenTouch
 		if st.pressed:
@@ -1107,8 +1177,8 @@ func _on_quake_chosen(lat: float, lon: float) -> void:
 	if _globe_container.visible:
 		_globe.look_at_location(lat, lon)
 
-## A new earthquake arrived: plays the new-quake sound (loaded on first use) if sounds are on and the quake meets the
-## minimum magnitude.
+## A new earthquake arrived: plays the new-quake sound (loaded on first use) if sounds are on, the sound is not "No Sound"
+## ([constant Settings.NO_SOUND]) and the quake meets the minimum magnitude.
 ##
 ## [param q]: the quake Dictionary.
 func _on_new_quake(q: Dictionary) -> void:
@@ -1116,6 +1186,8 @@ func _on_new_quake(q: Dictionary) -> void:
 		return
 	if Settings.get_bool("enable_sounds"):
 		var file := Settings.get_string("quake_sound")
+		if file == Settings.NO_SOUND:
+			return
 		if not _sounds.has(file):
 			_sounds[file] = load("res://Assets/Sounds/" + file)
 		if _sounds[file] != null:

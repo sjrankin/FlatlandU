@@ -358,7 +358,7 @@ struct ParagraphView: View {
     }
 }
 
-/// A list row: optional leading text (a magnitude), title and subtitle, detail on the right, and either a check box
+/// A list row: optional colored dot and leading text (a magnitude), title and subtitle, detail on the right, and either a check box
 /// bound to a key or a tap that sends the row's id. A selected row shows a tick; a dimmed one is faded.
 struct ListRow: View {
     /// The screen's model.
@@ -369,14 +369,27 @@ struct ListRow: View {
     /// The row's layout.
     private var content: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
+            if !item.dot.isEmpty {
+                Circle().fill(Color(hex: item.dot)).frame(width: 10, height: 10)
+            }
             if !item.leading.isEmpty {
                 Text(item.leading)
                     .font(.headline.monospacedDigit())
-                    .foregroundStyle(item.accent.isEmpty ? Color.primary : Color(hex: item.accent))
+                    .foregroundStyle(item.accent.isEmpty || !item.dot.isEmpty ? Color.primary : Color(hex: item.accent))
                     .frame(minWidth: 36, alignment: .leading)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.title)
+                HStack(spacing: 6) {
+                    Text(item.title)
+                    if !item.badge.isEmpty {
+                        Text(item.badge)
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Color.red, in: Capsule())
+                    }
+                }
                 if !item.subtitle.isEmpty {
                     Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
                 }

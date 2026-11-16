@@ -1,7 +1,13 @@
 package com.flatland.nativeui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -82,7 +88,17 @@ fun ItemRow(model: ScreenModel, item: ScreenItem, navigate: (Route) -> Unit) {
         ItemKind.Toggle -> {
             val on = valueBool(model.value(item.key))
             ListItem(
-                headlineContent = { Text(item.title) },
+                headlineContent = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(item.title)
+                if (item.badge.isNotEmpty()) {
+                    Text(
+                        item.badge, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.clip(RoundedCornerShape(50)).background(Color.Red).padding(horizontal = 6.dp, vertical = 1.dp),
+                    )
+                }
+            }
+        },
                 trailingContent = { Switch(checked = on, onCheckedChange = { model.set(item.key, it) }) },
                 colors = clearColors(),
                 modifier = Modifier.clickableRow { model.set(item.key, !on) },
@@ -200,7 +216,15 @@ private fun ListRow(model: ScreenModel, item: ScreenItem) {
     }
     ListItem(
         leadingContent = if (item.leading.isEmpty()) null else {
-            { Text(item.leading, color = accent, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium) }
+            {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (item.dot.isNotEmpty()) Box(Modifier.size(10.dp).clip(CircleShape).background(parseHex(item.dot)))
+                    Text(
+                        item.leading, color = if (item.dot.isNotEmpty()) MaterialTheme.colorScheme.onSurface else accent,
+                        fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+            }
         },
         headlineContent = { Text(item.title) },
         supportingContent = if (item.subtitle.isEmpty()) null else { { Text(item.subtitle) } },

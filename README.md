@@ -30,7 +30,7 @@ Currently, FlatlandU works on the following platforms:
 ### Extending Flatland
 A feature I wanted to add to the original Flatland was the display of satellites. I never did this due to the press of other concerns. FlatlandU made it straightforward to add satellites to the app.
 
-Other extensions I am considering are: grouping earthquakes to avoid visual clutter, better star background (perhaps with lines delimiting constellations), and maybe adding motion detections (see HUDViewWatch) to update the background realtime.
+Earthquakes that are close together can be grouped (Preferences > Earthquakes) so only the largest of each group is drawn. Other extensions I am considering are: better star background (perhaps with lines delimiting constellations), and maybe adding motion detections (see HUDViewWatch) to update the background realtime.
 
 An earlier version of Flatland had the moon in the overall view as well. That is a good candidate to add back.
 
