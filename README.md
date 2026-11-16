@@ -22,19 +22,26 @@ My goal was to have an updated version of Flatland where I can add new features 
 ### Platforms
 Currently, FlatlandU works on the following platforms:
 #### macOS
+<img src="Images/macOSFlatlandU.gif" alt="Animation of FlatlandU running on macOS.">
+
 #### iOS
-<img src="Images/FlatlandUoniOS.gif" alt="Animation of FlatlandU running on iOS.">\
+<img src="Images/FlatlandUoniOS.gif" alt="Animation of FlatlandU running on iOS.">
+
 #### Android
+
+<img src="Images/FlatlandUAndroid.gif" alt="Animation of FlatlandU running on Android.">
+
 #### Windows
 
-### Extending Flatland
-A feature I wanted to add to the original Flatland was the display of satellites. I never did this due to the press of other concerns. FlatlandU made it straightforward to add satellites to the app.
-
-Earthquakes that are close together can be grouped (Preferences > Earthquakes) so only the largest of each group is drawn. Other extensions I am considering are: better star background (perhaps with lines delimiting constellations), and maybe adding motion detections (see HUDViewWatch) to update the background realtime.
-
-An earlier version of Flatland had the moon in the overall view as well. That is a good candidate to add back.
+<img src="Images/FlatlandUWindows.gif" alt="Animation of FlatlandU running on Windows.">
 
 ## Features
+### Earthquakes
+The main reason for the existence of Flatland is to show earthquakes. The app relies on the USGS (United States Geologic Service) for real-time earthquake data, refreshed periodically. As new earthquakes are reported, they are plotted on Flatland. As older earthquakes are aged out, they are removed. This happens in the background with no user intervention needed (although functionality is provided to let the user pull the most recent earthquakes.)\
+
+Earthquakes tend to occur in the same geographical area (main earthquake then aftershocks, or earthquake prone areas (Japan)). This can lead to confusing views on Flatland. I added a feature to group earthquakes by geographic region. In the image below, a group of earthquakes all occured in the same general region in Peru. The magnitude of the largest earthquake that hasn't aged out is shown along with the number of other earthquakes in parenthesis.\
+
+<img src="Images/GroupedEarthquakes.png" alt="Grouped earthquakes." width="500">
 
 ### 3D View
 #### Sphere
@@ -53,18 +60,18 @@ All maps used by FlatlandU must be supplied in three formats:
 In general, the larger the map, the better the end-product looks. However, the larger the map, the larger the binary.
 #### Cities
 A set of cities is built-into FlatlandU. Cities are shown with various markers to provide context for earthquakes.
-### Earthquakes
-The feature that is used the most with FlatlandU is seeing new earthquakes. Earthquake data is retrieved from the USGS periodically and new earthquakes are plotted. Earthquakes remain on the map for a set amount of time.
+### Sublunar and Subsolar
+The sublunar and subsolar (points on the earth directly under the moon or sun) are optionally shown on the globe and flat maps. The globe shows them with a blue (the moon) or yellow (the sun) sphere on the surface of the globe. The flat maps use images instead.
 ### Stars
-This is a new, not fully completed feature that shows the arrangement of the 1000 brightest stars as a background to the main view.
+This is a new, not fully completed feature that shows the arrangement of the 2000 brightest stars as a background to the main view.
 ### Satellites
 This is also a not yet completed feature that shows various satellites (mainly Earth-observation satellites or space stations or weather satellites). Satellites are show over the map being used and labeled.
 
 ## Godot Notes
 ### User Interface
-The user interface from Godot is acceptable on macOS and Windows where there is a great deal of space for the small text chosen by Godot. On smaller devices, the user interface becomes untenable. This required specific instructions to Claude to update how Godot displays on smaller devices, adding more code paths.
+The user interface from Godot is fine for development but for general purpose use, not necessarily what is desired. For macOS (which is where the app was developed), I created standard Mac dialogs. This works and looks fine but when showing, the main Flatland UI freezes. Long run, a Godot native UI would work the best.
 
-Godot cannot use native controls directly, which is to be expected given its goals (games, not user interfaces for non-game utilities). On iOS and Android the dialogs and button bar are therefore drawn by small native plug-ins that Godot talks to (SwiftUI on Apple devices, Jetpack Compose on Android); the details are in [Implementation.md](Implementation.md).
+If the native UI code cannot be used, Flatland falls back to the Godot dialogs.
 
 ## Implementation and building
 How the code is organized (what is shared and what is platform-specific), what has been ported, the development
