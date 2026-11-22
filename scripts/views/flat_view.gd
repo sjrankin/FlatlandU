@@ -671,7 +671,10 @@ func _draw_quakes() -> void:
 		if not stage_mode:     # on the 3D stage the earthquake is a 3D shape; its ring and number stay
 			draw_circle(p + _shadow_offset(p, 3.0 + q["magnitude"] * 0.6), (3.0 + q["magnitude"] * 0.7) * _k(), Color(0, 0, 0, 0.4))
 			draw_circle(p, (3.0 + q["magnitude"] * 0.7) * _k(), Color(col, 0.55))
-			draw_arc(p, (3.0 + q["magnitude"] * 0.7) * _k(), 0.0, TAU, 20, col, 1.0, true)
+			if Settings.get_bool("quake_outlines"):
+				draw_arc(p, (3.0 + q["magnitude"] * 0.7) * _k(), 0.0, TAU, 32, Shapes.quake_border_color(q["magnitude"]), 1.5 * _k(), true)
+			else:
+				draw_arc(p, (3.0 + q["magnitude"] * 0.7) * _k(), 0.0, TAU, 20, col, 1.0, true)
 		draw_string(_font, p + Vector2(8, -8), "%.1f" % q["magnitude"], HORIZONTAL_ALIGNMENT_LEFT, -1, int(26 * _k()), col)
 
 ## Draws the still "Arrow and Ring" marker: a ring round the spot and a down-pointing arrow above it, both growing

@@ -203,6 +203,7 @@ func _quakes(tabs: TabContainer) -> void:
 		["Static Arrow", "Static Arrow"], ["Pyramid", "Pyramid"], ["Cone", "Cone"], ["Box", "Box"],
 		["Cylinder", "Cylinder"], ["Capsule", "Capsule"], ["Tethered Magnitude", "Tethered Magnitude"]]))
 	p.add_child(SettingControls.option("Indicator scale", "quake_scale", [["Small", "Small"], ["Normal", "Normal"], ["Large", "Large"]]))
+	p.add_child(SettingControls.check("Outline earthquake indicators and magnitudes", "quake_outlines"))
 	p.add_child(SettingControls.check("Group nearby earthquakes (show the largest of each group)", "quake_group"))
 	p.add_child(SettingControls.spin("Group distance", "quake_group_km", 10, 1000, 10, " km"))
 	p.add_child(SettingControls.check("Highlight new earthquakes", "quake_highlight_new"))

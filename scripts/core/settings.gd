@@ -87,6 +87,7 @@ const DEFAULTS := {
 	"quake_highlight_new": true,  # mark new quakes
 	"quake_indicator": "Radiating Rings",  # how new quakes are marked (see PowerManager.quakes_animate)
 	"quake_recent_hours": 24,  # how long a quake counts as new, in hours
+	"quake_outlines": false,  # draw outlines (borders) on earthquake shapes and magnitude text
 	"quake_group": false,  # group nearby earthquakes on the map: only the largest of a group is drawn
 	"quake_group_km": 100,  # how close (km) earthquakes must be to one another to be grouped
 	"city_shape": "Uniform Flush Spheres",  # 3D shape used for a city

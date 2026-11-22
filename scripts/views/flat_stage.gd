@@ -679,6 +679,7 @@ func _quake_magnitude_text(mag: float, size: float, mat: Material, count: int = 
 	mi.mesh = tm
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	Shapes.add_text_border(mi, mag, height, "s|%s|%.4f" % [tm.text, height])
 	# Lie flat, just in front of the shape (towards the bottom of the screen).
 	mi.transform = Transform3D(Basis(Vector3.RIGHT, -PI / 2.0), Vector3(0.0, tm.depth * 0.5 + 0.01, size * 0.5 + height))
 	return mi
@@ -944,7 +945,7 @@ func _update_cities(recheck: bool) -> void:
 func _update_quakes(recheck: bool) -> void:
 	if recheck or _quake_key == "":
 		var quakes: Array = QuakeService.map_quakes() if Settings.get_bool("enable_earthquakes") else []
-		var key := "%s|%s|%d|%s|%s" % [_quake_kind(), Settings.get_string("quake_scale"), quakes.size(),
+		var key := "%s|%s|%s|%d|%s|%s" % [_quake_kind(), Settings.get_string("quake_scale"), Settings.get_bool("quake_outlines"), quakes.size(),
 			Settings.get_bool("quake_highlight_new"), Settings.get_float("quake_recent_hours")]
 		for q in quakes:
 			key += "|%s#%d" % [q["id"], int(q.get("group_count", 1))]
@@ -969,12 +970,16 @@ func _update_quakes(recheck: bool) -> void:
 					tip.top_radius = size * 0.45
 					tip.bottom_radius = 0.0
 					tip.height = size * 1.1
-					arrow.add_child(_marker(tip, size * 0.55, mat))
+					var tip_mi := _marker(tip, size * 0.55, mat)
+					Shapes.add_quake_border(tip_mi, mag)
+					arrow.add_child(tip_mi)
 					var shaft := CylinderMesh.new()
 					shaft.top_radius = size * 0.14
 					shaft.bottom_radius = size * 0.14
 					shaft.height = size * 1.3
-					arrow.add_child(_marker(shaft, size * 1.1 + size * 0.65, mat))
+					var shaft_mi := _marker(shaft, size * 1.1 + size * 0.65, mat)
+					Shapes.add_quake_border(shaft_mi, mag, true)
+					arrow.add_child(shaft_mi)
 					if kind == "arrow_animated":
 						var d := maxf(0.2, (10.0 - mag) / 5.0)
 						var top := size * 0.8
@@ -987,7 +992,9 @@ func _update_quakes(recheck: bool) -> void:
 				elif kind == "pulsing":
 					holder.add_child(_pulsing_sphere(size, color, mag))
 				else:
-					holder.add_child(_marker(_shape_mesh(kind, size), _shape_half_height(kind, size), mat))
+					var shape_mi := _marker(_shape_mesh(kind, size), _shape_half_height(kind, size), mat)
+					Shapes.add_quake_border(shape_mi, mag)
+					holder.add_child(shape_mi)
 				if kind != "tethered":
 					holder.add_child(_quake_magnitude_text(mag, size, mat, int(q.get("group_count", 1))))
 				_quakes_root.add_child(holder)

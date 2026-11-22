@@ -560,7 +560,7 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 		"show_shadows_3d", "graphics_quality":
 			_apply_shadows()
 		"enable_earthquakes", "quake_min_magnitude", "quake_max_age_days", "quake_shape", "quake_scale", \
-		"quake_indicator", "quake_highlight_new", "quake_recent_hours", "quake_group", "quake_group_km":
+		"quake_indicator", "quake_highlight_new", "quake_recent_hours", "quake_group", "quake_group_km", "quake_outlines":
 			_rebuild_quakes()
 		"show_heritage_sites":
 			_rebuild_sites()
@@ -1660,6 +1660,7 @@ func _build_quake(q: Dictionary) -> Node3D:
 	var em := 0.05 * (7.0 + mag)
 	var radial := R + 0.3 + (mag / 10.0) * 0.7
 	var t := _flat_text("M" + s, lat, lon, radial, em, 0.15, true, Geo.quake_font())
+	Shapes.add_text_border(t, mag, em, "g|M%s|%.4f|%.4f" % [s, em, radial])
 	group.add_child(t)
 	_register_dn(t, lat, lon, col, col)
 	return group
@@ -1726,6 +1727,9 @@ func _make_quake_shape(q: Dictionary, col: Color) -> Node3D:
 			stem_mi.mesh = stem
 			stem_mi.position = Vector3(0, 0.5, 0)
 			arrow.add_child(stem_mi)
+			# The stem is as deep as the head, so the head's top edges run along the stem's base: no line there.
+			Shapes.add_quake_border(head_mi, mag, false, AABB(Vector3(-0.1075, -0.35, -0.101), Vector3(0.215, 0.04, 0.202)))
+			Shapes.add_quake_border(stem_mi, mag, true)
 			if animated:
 				_register_dn(head_mi, lat, lon, col, col)
 				_register_dn(stem_mi, lat, lon, col, col)
@@ -1752,6 +1756,8 @@ func _make_quake_shape(q: Dictionary, col: Color) -> Node3D:
 			mi.mesh = sph
 			mi.material_override = Shapes.plain(Color(col, 0.6)) if pulsing else plain
 			holder.add_child(mi)
+			if not pulsing:      # the translucent pulsating sphere would show its border through itself
+				Shapes.add_quake_border(mi, mag)
 			holder.scale = Vector3.ONE * (0.749 if pulsing else 0.9993) * mult
 			if pulsing:
 				var d := 0.7 + (10.0 - mag) * 0.05
@@ -1766,6 +1772,7 @@ func _make_quake_shape(q: Dictionary, col: Color) -> Node3D:
 			mi.mesh = Shapes.pyramid_mesh(0.5, 2.5, 0.5)
 			mi.material_override = plain
 			holder.add_child(mi)
+			Shapes.add_quake_border(mi, mag)
 			return holder
 		"Cone", "Box", "Cylinder", "Capsule":
 			var holder := _up_node(lat, lon, R + 0.5)
@@ -1798,6 +1805,7 @@ func _make_quake_shape(q: Dictionary, col: Color) -> Node3D:
 					holder.scale = Vector3.ONE * 1.0003 * mult
 			mi.material_override = plain
 			holder.add_child(mi)
+			Shapes.add_quake_border(mi, mag)
 			return holder
 		"Tethered Magnitude":
 			return _tethered_quake(q, col, mult)
@@ -2596,17 +2604,25 @@ func handle_gui_input(event: InputEvent) -> void:
 				_pan.y = clampf(_pan.y + mm.relative.y * k, -40.0, 40.0)
 			else:
 				var speed := 0.004 * (_distance / DEFAULT_DISTANCE)
-				_yaw -= mm.relative.x * speed
-				_pitch = clampf(_pitch - mm.relative.y * speed, -1.45, 1.45)
+				_turn(-mm.relative.x * speed, -mm.relative.y * speed)
 			_apply_camera()
 	elif event is InputEventMagnifyGesture:
 		_distance = clampf(_distance / (event as InputEventMagnifyGesture).factor, MIN_DISTANCE, MAX_DISTANCE)
 		_apply_camera()
 	elif event is InputEventPanGesture:
 		var pg := event as InputEventPanGesture
-		_yaw += pg.delta.x * 0.01
-		_pitch = clampf(_pitch + pg.delta.y * 0.01, -1.45, 1.45)
+		_turn(pg.delta.x * 0.01, pg.delta.y * 0.01)
 		_apply_camera()
+
+## Turns the globe with a drag, without limits: the pitch may go over the poles and all the way round. Once the view is
+## upside down (past the pole) the yaw change is reversed, so a drag to the right still turns the globe the same way
+## on screen.
+##
+## [param d_yaw]: the yaw change in radians for a drag along the screen's X axis.
+## [param d_pitch]: the pitch change in radians for a drag along the screen's Y axis.
+func _turn(d_yaw: float, d_pitch: float) -> void:
+	_yaw = wrapf(_yaw + d_yaw * (1.0 if cos(_pitch) >= 0.0 else -1.0), -PI, PI)
+	_pitch = wrapf(_pitch + d_pitch, -PI, PI)
 
 ## Counts presses so a pending long-press timer can tell it was cancelled (the finger moved, lifted, or another press
 ## started).
