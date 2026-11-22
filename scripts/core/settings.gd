@@ -72,6 +72,7 @@ const DEFAULTS := {
 	"show_tropics": true,  # draw the tropics of Cancer and Capricorn
 	"show_noon_meridians": true,  # draw the noon and midnight meridians
 	"show_minor_grid": true,  # draw the finer grid lines
+	"moon_brightness": 0.1,  # brightness of the moon light on the night side (0 to 1; the light's energy)
 	"show_moon_light": true,  # light the night side faintly, as moonlight (3D)
 	"show_sun_point": true,  # draw a ball on the Earth under the Sun
 	"show_moon_point": true,  # draw a ball on the Earth under the Moon

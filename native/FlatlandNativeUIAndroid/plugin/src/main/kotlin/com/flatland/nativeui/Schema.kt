@@ -92,7 +92,7 @@ enum class ItemKind { Section, Toggle, Choice, Number, Color, Text, Action, Info
             "section" -> Section
             "toggle" -> Toggle
             "choice" -> Choice
-            "number" -> Number
+            "number", "slider" -> Number      // Android has no slider: a slider shows as a number field
             "color" -> Color
             "text" -> Text
             "action" -> Action

@@ -370,14 +370,47 @@ static func scale_for(setting: String) -> float:
 		"Large": return 1.5
 	return 1.0
 
+## Vertex colors for extruded text that make the sides of the letters darker than their faces: white where the surface
+## faces along the text's depth axis (the front and back), `shade` gray elsewhere (the sides). The material must use the
+## vertex color as albedo (`vertex_color_use_as_albedo`).
+##
+## [param verts]: the mesh's vertices (only their count is used).
+## [param norms]: the mesh's normals.
+## [param shade]: the brightness of the sides, from 0 (black) to 1 (as the faces).
+## Returns: the colors, one per vertex.
+static func side_colors(verts: PackedVector3Array, norms: PackedVector3Array, shade: float) -> PackedColorArray:
+	var colors := PackedColorArray()
+	colors.resize(verts.size())
+	for i in verts.size():
+		var is_face := i < norms.size() and absf(norms[i].z) > 0.7
+		colors[i] = Color.WHITE if is_face else Color(shade, shade, shade, 1.0)
+	return colors
+
+## A text mesh whose sides are darker than its faces: the TextMesh's geometry with vertex colors from
+## [method side_colors].
+##
+## [param tm]: the TextMesh.
+## [param shade]: the brightness of the sides, from 0 to 1.
+## Returns: an ArrayMesh, or the TextMesh itself if it has no geometry.
+static func shaded_text(tm: TextMesh, shade: float) -> Mesh:
+	var arrays := tm.get_mesh_arrays()
+	if arrays.is_empty() or arrays[Mesh.ARRAY_VERTEX] == null or (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).is_empty():
+		return tm
+	arrays[Mesh.ARRAY_COLOR] = side_colors(arrays[Mesh.ARRAY_VERTEX], arrays[Mesh.ARRAY_NORMAL], shade)
+	var out := ArrayMesh.new()
+	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return out
+
 ## Bends flat extruded text around a sphere, so it follows the curvature of the Earth (or of the ring the welcome text
 ## travels on) instead of sticking out in a straight line. The sphere's center lies at local (0, 0, -radius) of the
 ## text. Vertices, normals and tangents are all rotated.
 ##
 ## [param tm]: the TextMesh holding the text.
 ## [param radius]: the sphere's radius.
+## [param side_shade]: below 1, the extruded sides of the letters are drawn this much darker than their faces (see
+##   [method side_colors]); 1 leaves the text as it is.
 ## Returns: a new ArrayMesh with the bent text, or the original TextMesh if it has no geometry.
-static func bend_text(tm: TextMesh, radius: float) -> Mesh:
+static func bend_text(tm: TextMesh, radius: float, side_shade: float = 1.0) -> Mesh:
 	var arrays := tm.get_mesh_arrays()
 	if arrays.is_empty() or arrays[Mesh.ARRAY_VERTEX] == null:
 		return tm
@@ -405,6 +438,8 @@ static func bend_text(tm: TextMesh, radius: float) -> Mesh:
 	arrays[Mesh.ARRAY_NORMAL] = norms
 	if tans.size() > 0:
 		arrays[Mesh.ARRAY_TANGENT] = tans
+	if side_shade < 1.0:
+		arrays[Mesh.ARRAY_COLOR] = side_colors(verts, norms, side_shade)
 	var out := ArrayMesh.new()
 	out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return out

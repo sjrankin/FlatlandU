@@ -278,6 +278,8 @@ struct ScreenRow: View {
             ChoiceRow(model: model, item: item)
         case .number:
             NumberRow(model: model, item: item)
+        case .slider:
+            SliderRow(model: model, item: item)
         case .color:
             ColorPicker(item.title, selection: model.binding(color: item.key), supportsOpacity: false)
         case .text:
@@ -520,6 +522,27 @@ struct NumberRow: View {
                 if !item.suffix.isEmpty { Text(item.suffix).foregroundStyle(.secondary) }
                 Stepper("", value: model.binding(double: item.key), in: item.minimum...item.maximum, step: item.step)
                     .labelsHidden()
+            }
+        }
+    }
+}
+
+/// A number on a slider, with the value shown (two decimals) beside it.
+struct SliderRow: View {
+    /// The screen's model.
+    @ObservedObject var model: ScreenModel
+    /// The "slider" item (minimum, maximum and step).
+    let item: ScreenItem
+
+    /// The label, slider and value.
+    var body: some View {
+        LabeledContent(item.title) {
+            HStack {
+                Slider(value: model.binding(double: item.key), in: item.minimum...item.maximum, step: item.step)
+                Text(model.value(item.key).double, format: .number.precision(.fractionLength(2)))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 40, alignment: .trailing)
             }
         }
     }

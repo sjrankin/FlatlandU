@@ -629,6 +629,7 @@ func _color_material(c: Color) -> StandardMaterial3D:
 		m.metallic_specular = 0.5
 		m.emission_enabled = true
 		m.emission = c * 0.2
+		m.vertex_color_use_as_albedo = true      # lets magnitude text draw its sides darker (meshes without colors are unaffected)
 		_material_cache[key] = m
 	return _material_cache[key]
 
@@ -676,7 +677,7 @@ func _quake_magnitude_text(mag: float, size: float, mat: Material, count: int = 
 	tm.pixel_size = height / 64.0
 	tm.depth = height * 0.3
 	var mi := MeshInstance3D.new()
-	mi.mesh = tm
+	mi.mesh = Shapes.shaded_text(tm, 0.45)      # the sides of the letters are darker than their faces
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	Shapes.add_text_border(mi, mag, height, "s|%s|%.4f" % [tm.text, height])

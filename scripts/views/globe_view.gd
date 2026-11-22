@@ -230,6 +230,8 @@ const EARTH_SHADOW_LAYER := 1 << 19
 ## Render layer for objects on the night side: the Sun's light ignores it, so the Sun cannot light their sides near
 ## the edge of the lit half.
 const NIGHT_LAYER := 1 << 1
+## Brightness of the extruded sides of an earthquake's magnitude text relative to its faces (1 is the same).
+const QUAKE_TEXT_SIDE_SHADE := 0.45
 ## Where the last mouse press began, to tell a tap from a drag ([constant TAP_SLOP]).
 var _tap_start := Vector2.ZERO
 ## How far in pixels a press may move and still count as a tap.
@@ -383,10 +385,17 @@ func _build_scene() -> void:
 	add_child(_sun)
 
 	_moon = DirectionalLight3D.new()
-	_moon.light_energy = 0.1
+	_moon.light_energy = Settings.get_float("moon_brightness")
 	_moon.light_color = Color.CYAN
 	_moon.light_cull_mask = 0xFFFFF & ~MOON_LAYER
+	_moon.shadow_enabled = true
+	_moon.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+	_moon.directional_shadow_max_distance = 215.0
+	_moon.shadow_bias = 0.03
+	_moon.shadow_normal_bias = 0.5
+	_moon.shadow_opacity = 0.75
 	add_child(_moon)
+	_apply_shadows()
 	_build_moon()
 
 	_orbit = Node3D.new()
@@ -536,7 +545,8 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 	match key:
 		"map_type":
 			_apply_map()
-		"show_cities", "city_filter", "city_rank", "show_city_names", "city_shape", "city_scale":
+		"show_cities", "city_filter", "city_rank", "show_city_names", "city_shape", "city_scale", "moon_brightness", \
+		"show_moon_light":
 			_rebuild_cities()
 		"show_grid", "show_equator", "show_polar_circles", "show_tropics", \
 		"show_noon_meridians", "show_minor_grid":
@@ -551,6 +561,9 @@ func _on_setting_changed(key: String, _value: Variant) -> void:
 			_apply_camera()
 		"show_moon_light":
 			_moon.visible = Settings.get_bool("show_moon_light")
+			_update_time(false)
+		"moon_brightness":
+			_moon.light_energy = Settings.get_float("moon_brightness")
 			_update_time(false)
 		"show_stars", "show_sun":
 			_apply_stars()
@@ -639,6 +652,9 @@ func _set_tex(mat: ShaderMaterial, tex: Texture2D) -> void:
 func _apply_shadows() -> void:
 	var on := Settings.get_bool("show_shadows_3d") and PowerManager.shadows_allowed()
 	_sun.shadow_caster_mask = 0xFFFFF if on else EARTH_SHADOW_LAYER
+	# The moon light's shadows follow the same switch (with no shadows at all when it is off).
+	if _moon != null:
+		_moon.shadow_enabled = on
 
 ## Builds the sky: a large sphere (with the Sun's picture) centered on, and moving with, the camera, sitting just
 ## beyond everything else, plus the stars ([method _build_stars]).
@@ -915,6 +931,7 @@ func _mat_pair(color: Color, glow: Color) -> Array:
 	day.albedo_color = color
 	day.roughness = 0.4
 	day.metallic_specular = 0.6
+	day.vertex_color_use_as_albedo = true      # lets magnitude text draw its sides darker (meshes without colors are unaffected)
 	var night := day.duplicate() as StandardMaterial3D
 	night.emission_enabled = true
 	night.emission = glow
@@ -974,7 +991,7 @@ func _set_night_layer(node: MeshInstance3D, night: bool) -> void:
 ##   it.
 ## [param font]: a font, or null for the label font.
 ## Returns: the MeshInstance3D.
-func _flat_text(text: String, lat: float, lon: float, radius: float, em: float, depth: float, top_anchor: bool = false, font: Font = null) -> MeshInstance3D:
+func _flat_text(text: String, lat: float, lon: float, radius: float, em: float, depth: float, top_anchor: bool = false, font: Font = null, side_shade: float = 1.0) -> MeshInstance3D:
 	var tm := TextMesh.new()
 	tm.text = text
 	tm.font = font if font != null else Geo.label_font()
@@ -983,7 +1000,7 @@ func _flat_text(text: String, lat: float, lon: float, radius: float, em: float, 
 	tm.depth = depth
 	tm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var mi := MeshInstance3D.new()
-	mi.mesh = Shapes.bend_text(tm, radius)
+	mi.mesh = Shapes.bend_text(tm, radius, side_shade)
 	var basis := Geo.surface_basis(lat, lon)
 	var pos := Geo.to_vec3(lat, lon, radius)
 	if top_anchor:
@@ -1010,6 +1027,21 @@ func _up_node(lat: float, lon: float, radius: float) -> Node3D:
 ## Returns: the population.
 func _city_population(c: Dictionary) -> int:
 	return maxi(int(c.get("Population", 0)), int(c.get("MetropolitanPopulation", 0)))
+
+## How much of its glow a city name keeps on the night side: the moon's brightness decides, so a dim moon leaves the
+## names dark and a bright one lights them fully. Without moon light the names are at the dimmest.
+const NAME_NIGHT_MIN := 0.35
+## The moon brightness at and above which the names are at full glow.
+const NAME_NIGHT_FULL_BRIGHTNESS := 0.5
+
+## The night glow color of a city name, darkened in relation to the moon's brightness (see [constant NAME_NIGHT_MIN]).
+##
+## [param glow]: the full night glow color.
+## Returns: the color to use at night.
+func _night_name_glow(glow: Color) -> Color:
+	var brightness := Settings.get_float("moon_brightness") if Settings.get_bool("show_moon_light") else 0.0
+	var k := lerpf(NAME_NIGHT_MIN, 1.0, clampf(brightness / NAME_NIGHT_FULL_BRIGHTNESS, 0.0, 1.0))
+	return Color(glow.r * k, glow.g * k, glow.b * k, glow.a)
 
 ## Rebuilds the city markers in the shape chosen in Preferences (Flatland's CityDisplayTypes): flush or relative
 ## spheres, floating spheres or boxes, boxes, cylinders, pyramids, sticks or names. Every shape glows in its own color
@@ -1040,13 +1072,13 @@ func _rebuild_cities() -> void:
 		if shape == "Names":
 			var nt := _flat_text(" " + str(c["Name"]), lat, lon, R + 0.9, 0.7, 0.07)
 			_cities_node.add_child(nt)
-			_register_dn(nt, lat, lon, col, col)
+			_register_dn(nt, lat, lon, col, _night_name_glow(col))
 			_city_stick(c, col, 0.8, mult)
 			continue
 		if names:
 			var t := _flat_text(str(c["Name"]), lat, lon, R + 0.11, 0.7, 0.07)
 			_cities_node.add_child(t)
-			_register_dn(t, lat, lon, Color("#003153"), Color("#30b0c7"))
+			_register_dn(t, lat, lon, Color("#003153"), _night_name_glow(Color("#30b0c7")))
 		match shape:
 			"Uniform Flush Spheres":
 				_city_flush_sphere(c, col, maxf(0.15, 0.15))
@@ -1659,7 +1691,7 @@ func _build_quake(q: Dictionary) -> Node3D:
 		s += " (%d)" % int(q["group_count"])      # a group of quakes: how many it stands for
 	var em := 0.05 * (7.0 + mag)
 	var radial := R + 0.3 + (mag / 10.0) * 0.7
-	var t := _flat_text("M" + s, lat, lon, radial, em, 0.15, true, Geo.quake_font())
+	var t := _flat_text("M" + s, lat, lon, radial, em, 0.15, true, Geo.quake_font(), QUAKE_TEXT_SIDE_SHADE)
 	Shapes.add_text_border(t, mag, em, "g|M%s|%.4f|%.4f" % [s, em, radial])
 	group.add_child(t)
 	_register_dn(t, lat, lon, col, col)
@@ -2092,7 +2124,8 @@ func _update_time(snap: bool) -> void:
 	lit_mats.append_array(_cube_mats)
 	for mat in lit_mats:
 		mat.set_shader_parameter("sun_dir", sun_dir)
-		mat.set_shader_parameter("night_level", 0.14 if Settings.get_bool("show_moon_light") else 0.04)
+		# The night side's base brightness: 0.04 plus the moon's brightness (0.1 gives the original 0.14).
+		mat.set_shader_parameter("night_level", 0.04 + (Settings.get_float("moon_brightness") if Settings.get_bool("show_moon_light") else 0.0))
 	_sun.position = sun_dir * 100.0
 	_sun.look_at(Vector3.ZERO, Vector3.UP)
 	_moon.position = -sun_dir * 100.0

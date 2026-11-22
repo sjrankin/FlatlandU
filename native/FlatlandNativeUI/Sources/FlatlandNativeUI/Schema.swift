@@ -91,6 +91,8 @@ enum ItemKind: String {
     case choice
     /// A number with a stepper.
     case number
+    /// A number on a slider (between `minimum` and `maximum`), with its value shown beside it.
+    case slider
     /// A color, stored as "#rrggbb".
     case color
     /// A text field bound to a key.

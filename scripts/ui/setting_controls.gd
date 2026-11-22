@@ -136,6 +136,38 @@ static func spin(text: String, key: String, min_v: float, max_v: float, step: fl
 	row.add_child(sb)
 	return row
 
+## A labeled slider with its value shown beside it.
+##
+## [param text]: the label.
+## [param key]: the Settings key (a number).
+## [param min_v]: smallest value.
+## [param max_v]: largest value.
+## [param step]: the step size.
+## Returns: the row. Records a "slider" item when recording.
+static func slider(text: String, key: String, min_v: float, max_v: float, step: float) -> BoxContainer:
+	record_item({"type": "slider", "key": key, "title": text, "min": min_v, "max": max_v, "step": step})
+	var row := labeled_row(text, 150)
+	var sl := HSlider.new()
+	sl.min_value = min_v
+	sl.max_value = max_v
+	sl.step = step
+	sl.value = Settings.get_float(key)
+	sl.custom_minimum_size.x = 140.0
+	sl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var readout := Label.new()
+	readout.custom_minimum_size.x = 44.0
+	readout.text = String.num(sl.value, 2)
+	sl.value_changed.connect(func(v: float) -> void:
+		readout.text = String.num(v, 2)
+		Settings.set_value(key, v))
+	Settings.changed.connect(func(k: String, v: Variant) -> void:
+		if k == key and is_instance_valid(sl) and not is_equal_approx(sl.value, float(v)):
+			sl.set_value_no_signal(float(v))
+			readout.text = String.num(float(v), 2))
+	row.add_child(sl)
+	row.add_child(readout)
+	return row
+
 ## A section heading label.
 ##
 ## [param text]: the heading.

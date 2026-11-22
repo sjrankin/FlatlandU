@@ -117,6 +117,7 @@ func _general(tabs: TabContainer) -> void:
 	p.add_child(SettingControls.option("Night darkness", "night_darkness", [
 		["Very light", "VeryLight"], ["Light", "Light"], ["Dark", "Dark"], ["Very dark", "VeryDark"]]))
 	p.add_child(SettingControls.check("Show moon light on the night side (3D)", "show_moon_light"))
+	p.add_child(SettingControls.slider("Moon brightness", "moon_brightness", 0.0, 1.0, 0.01))
 	p.add_child(SettingControls.check("Attract mode (globe spins continuously)", "attract_mode"))
 	p.add_child(SettingControls.section("Sounds"))
 	p.add_child(SettingControls.check("Enable sounds", "enable_sounds"))
