@@ -13,7 +13,7 @@ import AppKit
 /// The GDScript side is NativeUI (scripts/core/native_ui.gd).
 ///
 /// Godot to native: showScreen, updateScreen, updateValue, closeScreen, showToolbar, updateToolbar, hideToolbar,
-/// powerState.
+/// powerState, windowIsShown.
 /// Native to Godot (signals): value_changed, action_triggered, sheet_closed, toolbar_tapped, toolbar_height_changed.
 @Godot
 final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
@@ -115,6 +115,20 @@ final class FlatlandNativeUI: RefCounted, @unchecked Sendable {
         case .serious: return "thermal"
         default: return info.isLowPowerModeEnabled ? "low_power" : "normal"
         }
+    }
+
+    /// Whether the app's window can be seen (macOS): false while the display sleeps, the screen is locked, or the
+    /// window is minimized or fully covered. PowerManager stops drawing meanwhile; a Metal driver that keeps
+    /// rendering to a display that is off eventually times out and crashes.
+    ///
+    /// - Returns: true if drawing is worthwhile; always true on iOS.
+    @Callable
+    func windowIsShown() -> Bool {
+        #if os(macOS)
+        return DisplayWatch.shared.windowIsShown()
+        #else
+        return true
+        #endif
     }
 
     /// Shows the native button bar, or updates it if it is already shown.

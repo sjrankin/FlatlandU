@@ -141,6 +141,19 @@ static func power_state() -> String:
 	var method := "power_state" if _bridge.has_method("power_state") else "powerState"
 	return str(_bridge.call(method))
 
+## Whether the app's window can be seen, from the native code (macOS only).
+##
+## Returns: false while the display sleeps, the screen is locked, or the window is minimized or fully covered; true
+##   otherwise, and wherever there is no native code to ask.
+static func window_shown() -> bool:
+	if OS.get_name() != "macOS" or not available():
+		return true
+	_connect()
+	var method := "window_is_shown" if _bridge.has_method("window_is_shown") else "windowIsShown"
+	if not _bridge.has_method(method):
+		return true     # an older native library without the call
+	return bool(_bridge.call(method))
+
 ## Whether a native dialog is on screen.
 ##
 ## Returns: true while one is open.

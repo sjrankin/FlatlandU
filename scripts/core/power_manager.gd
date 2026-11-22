@@ -8,6 +8,8 @@ extends Node
 ##   quake rings, satellites, attract mode). Touching the screen brings the chosen frame rate back at once.
 ## - Low Power Mode / heat: the native code reports the device's power state ("normal", "low_power", "thermal",
 ##   "critical"). With "follow_low_power" on, Low Power Mode or a hot device lowers the cap to 30 fps (20 when critical).
+## - Window hidden (macOS): while the display sleeps, the screen is locked or the window is minimized or fully covered,
+##   Godot stops drawing; a long run that kept rendering to a dark display crashed in the Metal driver.
 ## - Covered or in the background: while a native sheet covers the screen, or (phones and tablets only) the app is not in front, Godot stops
 ##   drawing altogether (scripts and timers keep running, so the sheets still get fresh data).
 ## - Graphics quality: the "graphics_quality" setting (Auto, High, Medium, Low) sets the anti-aliasing and the
@@ -41,6 +43,10 @@ var _covered := false
 ## True while the app is not in front (focus lost or app paused); set from [method _notification]. Only stops drawing
 ## on phones and tablets, see [method drawing].
 var _backgrounded := false
+## False while the desktop window cannot be seen (display asleep, screen locked, window minimized or covered), from
+## [method NativeUI.window_shown]. Rendering to a display macOS is not presenting to ends in a Metal fence time-out and a
+## crash, so [method drawing] is false meanwhile. Refreshed by [method _apply].
+var _window_shown := true
 ## The 3D sub-viewports registered with [method register_viewport], restyled when the graphics quality changes.
 var _viewports: Array[SubViewport] = []
 
@@ -138,7 +144,7 @@ func _apply_quality() -> void:
 	for vp in _viewports:
 		_style_viewport(vp)
 
-## Whether the app should be drawing at all. It is false while a native dialog covers the window, or (on phones and
+## Whether the app should be drawing at all. It is false while the window cannot be seen (see [member _window_shown]), while a native dialog covers the window, or (on phones and
 ## tablets only) while the app is not in front. A desktop window that is merely behind another keeps animating. The 3D
 ## views skip their per-frame work when this is false.
 ##
@@ -146,7 +152,7 @@ func _apply_quality() -> void:
 func drawing() -> bool:
 	# Losing focus only pauses drawing on phones and tablets, where it means the app left the screen. A desktop window
 	# that is merely behind another keeps animating.
-	return not (_covered or (_backgrounded and OS.has_feature("mobile")))
+	return _window_shown and not (_covered or (_backgrounded and OS.has_feature("mobile")))
 
 ## A native dialog starts or stops covering the window. While covered, drawing stops, because a desktop window half
 ## hidden behind another can make Godot wait for the display and starve the dialog.
@@ -211,6 +217,7 @@ func target_fps() -> int:
 ## or off ([method drawing]) and sets whether the screen may sleep ("keep_screen_on"). Cheap, so it is called often
 ## (timers, input, focus changes).
 func _apply() -> void:
+	_window_shown = NativeUI.window_shown()
 	var fps := target_fps()
 	if Engine.max_fps != fps:
 		Engine.max_fps = fps

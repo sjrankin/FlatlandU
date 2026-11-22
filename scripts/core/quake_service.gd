@@ -114,7 +114,8 @@ func _on_completed(result: int, code: int, _headers: PackedStringArray, body: Pa
 		var c: Array = f["geometry"]["coordinates"]
 		if p.get("mag") == null:
 			continue
-		fresh.append({"id": str(f["id"]), "magnitude": float(p["mag"]), "place": str(p.get("place", "")),
+		# USGS publishes e.g. 4.98 but displays it as M5.0; round the same way so the filters and colors agree with it.
+		fresh.append({"id": str(f["id"]), "magnitude": snappedf(float(p["mag"]), 0.1), "place": str(p.get("place", "")),
 			"time": float(p["time"]) / 1000.0, "lat": float(c[1]), "lon": float(c[0]),
 			"depth": float(c[2]) if c.size() > 2 else 0.0, "url": str(p.get("url", ""))})
 	fresh.sort_custom(func(a, b): return a["time"] > b["time"])
