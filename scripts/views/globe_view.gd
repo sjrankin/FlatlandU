@@ -1506,6 +1506,7 @@ func _hour_mesh(text: String, size: float, radius: float = 11.5) -> MeshInstance
 	mat.emission_enabled = true
 	mat.emission = Settings.get_color("color_hours") * 0.08
 	_apply_alpha_to_hour_material(mat, _hour_alpha)
+	_tint_hour_material(mat, _flash_strength)
 	mi.material_override = mat
 	return mi
 
@@ -1528,6 +1529,62 @@ func _apply_alpha_to_hour_material(mat: StandardMaterial3D, alpha: float) -> voi
 	c.a = alpha
 	mat.albedo_color = c
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA if alpha < 0.999 else BaseMaterial3D.TRANSPARENCY_DISABLED
+
+## The colour the hour labels flash at the top of each hour.
+const HOUR_FLASH_COLOR := Color(1.0, 0.05, 0.05)
+## One flash: bright red at once, fading out over this many seconds.
+const HOUR_FLASH_FADE := 1.0
+## The pause after each flash, in seconds.
+const HOUR_FLASH_WAIT := 0.5
+## How many times the labels flash at each hour change.
+const HOUR_FLASH_COUNT := 3
+## The UTC hour (Unix time / 3600) last seen, to notice the hour changing; -1 before the first frame.
+var _flash_hour := -1
+## When the current flash series began, in seconds since the app started; negative when none is running.
+var _flash_start := -1.0
+## True while the labels may still be tinted, so one last frame can restore their colour.
+var _flash_dirty := false
+## How red the labels are now, 0 to 1; new labels (made one per frame when the wall-clock labels are renewed) start
+## with it, so all of them flash together.
+var _flash_strength := 0.0
+
+## Tints one label material towards the flash colour.
+##
+## [param mat]: the label's material.
+## [param strength]: 0 for its normal colour, 1 for full red.
+func _tint_hour_material(mat: StandardMaterial3D, strength: float) -> void:
+	var base := Settings.get_color("color_hours")
+	var c := base.lerp(HOUR_FLASH_COLOR, strength)
+	c.a = mat.albedo_color.a
+	mat.albedo_color = c
+	mat.emission = (base * 0.08).lerp(HOUR_FLASH_COLOR * 0.7, strength)
+
+## Flashes the hour labels red at the top of each hour: [constant HOUR_FLASH_COUNT] times, each a jump to bright red that
+## fades out over [constant HOUR_FLASH_FADE] seconds followed by [constant HOUR_FLASH_WAIT] seconds of rest. Called
+## every frame.
+func _update_hour_flash() -> void:
+	var hour := int(floor(Solar.now() / 3600.0))
+	if _flash_hour >= 0 and hour != _flash_hour and Settings.get_string("hour_type") != Settings.HOURS_NONE:
+		_flash_start = Time.get_ticks_msec() / 1000.0
+	_flash_hour = hour
+	var strength := 0.0
+	if _flash_start >= 0.0:
+		var t := Time.get_ticks_msec() / 1000.0 - _flash_start
+		var period := HOUR_FLASH_FADE + HOUR_FLASH_WAIT
+		if t >= period * HOUR_FLASH_COUNT:
+			_flash_start = -1.0
+		else:
+			strength = maxf(0.0, 1.0 - fmod(t, period) / HOUR_FLASH_FADE)
+	_flash_strength = strength
+	if strength <= 0.0 and not _flash_dirty:
+		return
+	_flash_dirty = strength > 0.0
+	for parent in [_hours_earth, _hours_fixed]:
+		if parent == null:
+			continue
+		for mi in parent.get_children():
+			if mi is MeshInstance3D and mi.material_override is StandardMaterial3D:
+				_tint_hour_material(mi.material_override, strength)
 
 ## Updates all the hour labels' opacity for the current camera: 1 (fully opaque) in flight, otherwise from the
 ## camera's distance ([method _hour_alpha_for_distance]). Does nothing if it has not changed.
@@ -2205,6 +2262,7 @@ func _apply_camera() -> void:
 	var vs := get_viewport().get_visible_rect().size
 	_sun.directional_shadow_max_distance = cam_z + 40.0
 	_update_hour_alpha()
+	_update_hour_flash()
 	if _sky_mesh != null:
 		# Just inside the far plane, beyond everything in the scene.
 		var r := _camera.far - 2.0
